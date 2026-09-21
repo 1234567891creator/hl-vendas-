@@ -1,0 +1,7 @@
+{
+  "name": "HL Vendas - Vendas da Helena",
+  "description": "App oficial de vendas e encomendas de squishies, lápis fofos e papelaria do C.E.P.M.G Gilvan Sampaio, com painel administrativo e a assistente Lumininha AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
