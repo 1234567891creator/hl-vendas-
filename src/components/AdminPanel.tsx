@@ -41,7 +41,8 @@ import {
   VolumeX,
   Crown,
   CheckCircle,
-  User
+  User,
+  KeyRound
 } from 'lucide-react';
 import { 
   Product, 
@@ -60,6 +61,7 @@ import { sounds } from '../utils/audioEffects';
 import { INITIAL_STORE_CONFIG } from '../data/initialData';
 import { AvatarEditModal } from './AvatarEditModal';
 import { ProfileReportModal } from './ProfileReportModal';
+import { EditUserProfileModal } from './EditUserProfileModal';
 import { JoaoLucasSymbolStudio } from './JoaoLucasSymbolStudio';
 import { AnimatedPixelSprite } from './AnimatedPixelSprite';
 import { extractYouTubeId } from './SiteBackgroundVideo';
@@ -78,6 +80,7 @@ interface AdminPanelProps {
   onUpdateCoupons: (coupons: Coupon[]) => void;
   onTriggerLightShow: (mode: 'confetti' | 'rainbow' | 'flash_sale' | 'neon_disco') => void;
   onDeleteUser?: (userId: string) => void;
+  onUpdateUserProfile?: (updatedUser: UserProfile) => void;
   onUpdateUserAvatar?: (userId: string, newAvatarUrl: string) => void;
   symbolConfig?: SiteSymbolAnimationConfig;
   customSymbols?: CustomSymbol[];
@@ -105,6 +108,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onUpdateCoupons,
   onTriggerLightShow,
   onDeleteUser,
+  onUpdateUserProfile,
   onUpdateUserAvatar,
   symbolConfig,
   customSymbols = [],
@@ -167,7 +171,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleSaveAnnouncement = () => {
+  const handleSaveAnnouncement = async () => {
     sounds.playSparkle();
     const updated: StoreConfig = {
       ...tempConfig,
@@ -182,6 +186,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       localStorage.setItem('hl_config', JSON.stringify(updated));
       localStorage.setItem('hl_store_config', JSON.stringify(updated));
     } catch {}
+
+    // Disparar broadcast oficial para todos os clientes conectados via SSE
+    try {
+      await fetch('/api/announcement/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: updated.globalAnnouncement || 'Aviso da Direção e Vendas!',
+          senderName: updated.globalAnnouncementSenderName,
+          senderPhoto: updated.globalAnnouncementSenderAvatar,
+          senderRole: '👑 Administrador Máximo',
+          title: 'AVISO OFICIAL DA DIREÇÃO / HL VENDAS',
+          durationMs: 8000,
+          priority: 'golden',
+          userEmail: currentUser?.email || 'joaolucasgp1234@gmail.com',
+          isMaxAdmin: isMaxAdmin,
+        }),
+      });
+    } catch (e) {
+      console.error('Erro ao transmitir anúncio global:', e);
+    }
+
     setAnnouncementSaved(true);
     setTimeout(() => setAnnouncementSaved(false), 4000);
   };
@@ -258,6 +284,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // User Profile Report Modal State
   const [selectedReportUser, setSelectedReportUser] = useState<UserProfile | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  // User Profile Edit (Name & Password) Modal State
+  const [selectedUserForEdit, setSelectedUserForEdit] = useState<UserProfile | null>(null);
+  const [isEditProfileModalOpen, setIsEditProfileModalOpen] = useState(false);
+
+  const handleOpenEditUserModal = (u: UserProfile) => {
+    sounds.playPop();
+    setSelectedUserForEdit(u);
+    setIsEditProfileModalOpen(true);
+  };
+
+  const handleSaveEditedUser = (updated: UserProfile) => {
+    if (onUpdateUserProfile) {
+      onUpdateUserProfile(updated);
+    } else {
+      const nextUsers = users.map((usr) => (usr.id === updated.id ? updated : usr));
+      onUpdateUsers(nextUsers);
+    }
+    try {
+      const nextUsers = users.map((usr) => (usr.id === updated.id ? updated : usr));
+      localStorage.setItem('hl_users', JSON.stringify(nextUsers));
+    } catch {}
+    // Atualiza também se estiver com o relatório aberto
+    if (selectedReportUser?.id === updated.id) {
+      setSelectedReportUser(updated);
+    }
+  };
 
   const handleOpenAvatarModal = (u: UserProfile) => {
     sounds.playPop();
@@ -1587,8 +1640,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </span>
                         )}
 
-                        <div className="text-[10px] text-gray-500 pt-0.5">
-                          Senha: {u.password ? '••••••' : 'Padrão'}
+                        <div className="text-[11px] text-gray-700 pt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold text-gray-500">Senha:</span>
+                          <span className="font-mono text-[11px] font-bold bg-purple-50 text-purple-900 border border-purple-200 px-2 py-0.5 rounded-lg shadow-2xs">
+                            {u.password || '123456 (Padrão)'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1596,6 +1652,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {/* Profile Action Bar */}
                     <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditUserModal(u)}
+                          className="inline-flex items-center gap-1 text-[11px] text-pink-700 bg-pink-50 hover:bg-pink-100 border border-pink-300 px-2.5 py-1 rounded-xl font-bold transition-all cursor-pointer shadow-2xs hover:shadow-xs"
+                          title={`Mudar nome, senha e dados de ${u.name}`}
+                        >
+                          <KeyRound className="w-3 h-3 text-pink-600" />
+                          <span>Mudar Nome/Senha</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleOpenAvatarModal(u)}
@@ -3455,8 +3520,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         currentUser={currentUser}
         orders={orders}
         onUpdateUser={(updated) => {
-          const newUsers = users.map((u) => (u.id === updated.id ? updated : u));
-          onUpdateUsers(newUsers);
+          if (onUpdateUserProfile) {
+            onUpdateUserProfile(updated);
+          } else {
+            const newUsers = users.map((u) => (u.id === updated.id ? updated : u));
+            onUpdateUsers(newUsers);
+          }
           setSelectedReportUser(updated);
         }}
         onOpenAvatarModal={(u) => handleOpenAvatarModal(u)}
@@ -3467,6 +3536,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             onUpdateUsers(users.filter((u) => u.id !== userId));
           }
         }}
+      />
+
+      {/* Edit User Profile & Password Modal */}
+      <EditUserProfileModal
+        isOpen={isEditProfileModalOpen}
+        onClose={() => setIsEditProfileModalOpen(false)}
+        user={selectedUserForEdit}
+        onSaveUser={handleSaveEditedUser}
+        isMaxAdminViewer={isMaxAdmin}
       />
 
       {/* Avatar Edit Modal for Team Members */}

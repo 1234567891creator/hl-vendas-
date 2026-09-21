@@ -22,6 +22,8 @@ interface StoreEngagementMetricsProps {
   onOpenProfilesTab?: () => void;
   reviews?: SchoolReview[];
   onAddReview?: (review: Omit<SchoolReview, 'id' | 'date' | 'likes'>) => void;
+  globalStoreLikes?: number;
+  onToggleGlobalLike?: (isLiked: boolean) => void;
 }
 
 export const StoreEngagementMetrics: React.FC<StoreEngagementMetricsProps> = ({
@@ -31,16 +33,19 @@ export const StoreEngagementMetrics: React.FC<StoreEngagementMetricsProps> = ({
   onOpenProfilesTab,
   reviews = [],
   onAddReview,
+  globalStoreLikes,
+  onToggleGlobalLike,
 }) => {
-  // Real-time Likes State - Starts at 0 as explicitly requested:
-  // "quero que as estatisticas estejam zeradas e vão crescendo ou diminuindo com o tempo menos a da escola que so abaixa ou sobe por avaliações"
-  const [storeLikes, setStoreLikes] = useState<number>(() => {
+  // Real-time Likes State sincronizado com backend global ou local
+  const [localLikes, setLocalLikes] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('hl_store_likes_zeroed');
       if (saved !== null) return Math.max(0, Number(saved));
     } catch {}
     return 0;
   });
+
+  const displayLikes = typeof globalStoreLikes === 'number' ? globalStoreLikes : localLikes;
 
   const [hasLikedStore, setHasLikedStore] = useState<boolean>(() => {
     try {
@@ -81,22 +86,20 @@ export const StoreEngagementMetrics: React.FC<StoreEngagementMetricsProps> = ({
   const [quickName, setQuickName] = useState('');
   const [reviewSent, setReviewSent] = useState(false);
 
-  // Handle Like Button
+  // Handle Like Button (Sincronizado globalmente no servidor)
   const handleLikeToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     sounds.playPop();
-    if (hasLikedStore) {
-      const updated = Math.max(0, storeLikes - 1);
-      setStoreLikes(updated);
-      setHasLikedStore(false);
-      localStorage.setItem('hl_store_likes_zeroed', updated.toString());
-      localStorage.setItem('hl_user_liked_store_zeroed', 'false');
+    const nextLiked = !hasLikedStore;
+    setHasLikedStore(nextLiked);
+    localStorage.setItem('hl_user_liked_store_zeroed', String(nextLiked));
+
+    if (onToggleGlobalLike) {
+      onToggleGlobalLike(nextLiked);
     } else {
-      const updated = storeLikes + 1;
-      setStoreLikes(updated);
-      setHasLikedStore(true);
+      const updated = nextLiked ? localLikes + 1 : Math.max(0, localLikes - 1);
+      setLocalLikes(updated);
       localStorage.setItem('hl_store_likes_zeroed', updated.toString());
-      localStorage.setItem('hl_user_liked_store_zeroed', 'true');
     }
   };
 
@@ -174,7 +177,7 @@ export const StoreEngagementMetrics: React.FC<StoreEngagementMetricsProps> = ({
             </span>
             <div className="flex items-baseline gap-1.5">
               <span className="font-display font-black text-2xl sm:text-3xl tracking-tight leading-none">
-                {storeLikes}
+                {displayLikes}
               </span>
               <span className="text-[10px] text-pink-200 font-bold">dinâmico</span>
             </div>

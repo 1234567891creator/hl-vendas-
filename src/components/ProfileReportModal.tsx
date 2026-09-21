@@ -22,7 +22,12 @@ import {
   Edit3,
   Save,
   DollarSign,
-  Trash2
+  Trash2,
+  KeyRound,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  User
 } from 'lucide-react';
 import { UserProfile, Order } from '../types';
 import { sounds } from '../utils/audioEffects';
@@ -56,6 +61,11 @@ export const ProfileReportModal: React.FC<ProfileReportModalProps> = ({
   const [hasLiked, setHasLiked] = useState(false);
   
   // Admin editable fields
+  const [editName, setEditName] = useState<string>(user?.name || '');
+  const [editPassword, setEditPassword] = useState<string>(user?.password || '');
+  const [showPassword, setShowPassword] = useState<boolean>(true);
+  const [editSchoolClass, setEditSchoolClass] = useState<string>(user?.schoolClass || '');
+  const [editEmail, setEditEmail] = useState<string>(user?.email || '');
   const [editSales, setEditSales] = useState<number>(user?.salesCount || 0);
   const [editLikes, setEditLikes] = useState<number>(user?.likesReceived || 0);
   const [editFollowers, setEditFollowers] = useState<number>(user?.followersCount || 0);
@@ -110,6 +120,10 @@ export const ProfileReportModal: React.FC<ProfileReportModalProps> = ({
     sounds.playSuccess();
     const updated: UserProfile = {
       ...user,
+      name: editName.trim() || user.name,
+      password: editPassword.trim(),
+      schoolClass: editSchoolClass.trim() || undefined,
+      email: editEmail.trim() || user.email,
       salesCount: Number(editSales),
       likesReceived: Number(editLikes),
       followersCount: Number(editFollowers),
@@ -292,6 +306,11 @@ export const ProfileReportModal: React.FC<ProfileReportModalProps> = ({
                 setEditLikes(user.likesReceived);
                 setEditFollowers(user.followersCount);
                 setEditBio(user.bio || '');
+                setEditName(user.name || '');
+                setEditPassword(user.password || '');
+                setEditSchoolClass(user.schoolClass || '');
+                setEditEmail(user.email || '');
+                setShowPassword(true);
                 setActiveTab('admin_adjust');
               }}
               className={`pb-2.5 px-3 border-b-2 transition-colors flex items-center gap-1 ${
@@ -547,8 +566,101 @@ export const ProfileReportModal: React.FC<ProfileReportModalProps> = ({
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 text-amber-900 text-xs flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-600 flex-shrink-0" />
                 <span>
-                  <strong>Painel do Adm Máximo (João Lucas):</strong> Você pode ajustar métricas, pontos de vendas e biografias deste perfil diretamente.
+                  <strong>Painel do Adm Máximo (João Lucas):</strong> Você pode alterar o nome, a senha de acesso, a turma escolar e métricas deste perfil diretamente.
                 </span>
+              </div>
+
+              {/* Edição de Nome e Senha pelo Adm */}
+              <div className="bg-gradient-to-r from-pink-50 to-purple-50 border-2 border-pink-200 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center gap-1.5 text-pink-950 font-black text-xs">
+                  <KeyRound className="w-4 h-4 text-pink-600" />
+                  <span>Credenciais & Identificação (Nome e Senha)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1 flex items-center gap-1">
+                      <User className="w-3.5 h-3.5 text-pink-600" />
+                      <span>Nome do Perfil:</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Nome completo..."
+                      className="w-full bg-white border-2 border-pink-200 rounded-xl p-2.5 font-bold text-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-pink-400 shadow-2xs"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-gray-700 flex items-center gap-1">
+                        <KeyRound className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Senha de Acesso:</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          sounds.playPop();
+                          setEditPassword('123456');
+                        }}
+                        className="text-[10px] text-purple-700 bg-white border border-purple-200 px-1.5 py-0.5 rounded cursor-pointer hover:bg-purple-100"
+                        title="Redefine para 123456"
+                      >
+                        Padrão 123456
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={editPassword}
+                        onChange={(e) => setEditPassword(e.target.value)}
+                        placeholder="Senha do perfil..."
+                        className="w-full bg-white border-2 border-purple-200 rounded-xl p-2.5 font-mono font-bold text-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-purple-400 pr-9 shadow-2xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-purple-600 hover:text-purple-800 p-0.5 cursor-pointer"
+                        title={showPassword ? 'Ocultar senha' : 'Ver senha'}
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1 flex items-center gap-1">
+                      <GraduationCap className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Turma Escolar:</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={editSchoolClass}
+                      onChange={(e) => setEditSchoolClass(e.target.value)}
+                      placeholder="Ex: 9º B..."
+                      className="w-full bg-white border border-gray-300 rounded-xl p-2 text-xs font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1 flex items-center gap-1">
+                      <Mail className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Email / Login:</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={editEmail}
+                      onChange={(e) => setEditEmail(e.target.value)}
+                      placeholder="email@escola.com"
+                      className="w-full bg-white border border-gray-300 rounded-xl p-2 text-xs font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

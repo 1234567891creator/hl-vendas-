@@ -71,6 +71,7 @@ import { LiveSymbolFloatingOverlay } from './components/LiveSymbolFloatingOverla
 import { YouTubeAudioPlayer } from './components/YouTubeAudioPlayer';
 import { SymbolReactionLaunchBar } from './components/SymbolReactionLaunchBar';
 import { SiteBackgroundVideo, extractYouTubeId } from './components/SiteBackgroundVideo';
+import { GlobalAnnouncementOverlay } from './components/GlobalAnnouncementOverlay';
 
 import { detectCurrentDevice } from './utils/deviceDetector';
 import { sounds } from './utils/audioEffects';
@@ -158,11 +159,18 @@ export default function App() {
     };
   });
 
-  const handleUpdateStoreConfig = (newConfig: StoreConfig) => {
+  const handleUpdateStoreConfig = async (newConfig: StoreConfig) => {
     setStoreConfig(newConfig);
     try {
       localStorage.setItem('hl_config', JSON.stringify(newConfig));
       localStorage.setItem('hl_store_config', JSON.stringify(newConfig));
+    } catch {}
+    try {
+      await fetch('/api/global/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: newConfig }),
+      });
     } catch {}
   };
 
@@ -276,8 +284,8 @@ export default function App() {
     });
   };
 
-  // Comprehensive User Deletion: remove de todos os locais e atualiza o sistema de ponta a ponta
-  const handleDeleteUser = (userId: string) => {
+  // Comprehensive User Deletion: remove de todos os locais e sincroniza no servidor permanentemente
+  const handleDeleteUser = async (userId: string) => {
     // Proteger apenas a conta raiz original do João Lucas
     const target = users.find((u) => u.id === userId);
     if (target && target.email?.toLowerCase() === 'joaolucasgp1234@gmail.com' && target.id === 'user-joao-lucas') {
@@ -285,6 +293,15 @@ export default function App() {
     }
 
     sounds.playPop();
+
+    // Registra na lista negra local de excluídos para nunca mais ressurgir
+    try {
+      const existingDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+      if (!existingDeleted.includes(userId)) {
+        existingDeleted.push(userId);
+        localStorage.setItem('hl_deleted_user_ids', JSON.stringify(existingDeleted));
+      }
+    } catch {}
 
     // 1. Remove da lista de usuários
     const updatedUsers = users.filter((u) => u.id !== userId);
@@ -333,10 +350,20 @@ export default function App() {
 
     // 6. Remove de seguidos
     setFollowedUserIds((prev) => prev.filter((id) => id !== userId));
+
+    // 7. Notifica o backend para remover permanentemente e transmitir para todos os clientes
+    try {
+      await fetch('/api/global/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+    } catch {}
   };
 
-  // Comprehensive Profile Info Update: propaga dados e nomes atualizados
-  const handleUpdateUserProfile = (updatedUser: UserProfile) => {
+  // Comprehensive Profile Info Update: propaga dados e nomes atualizados e sincroniza no servidor
+  const handleUpdateUserProfile = async (updatedUser: UserProfile) => {
+    sounds.playSparkle();
     const updatedUsers = users.map((u) => (u.id === updatedUser.id ? updatedUser : u));
     setUsers(updatedUsers);
     localStorage.setItem('hl_users', JSON.stringify(updatedUsers));
@@ -382,6 +409,15 @@ export default function App() {
           localStorage.setItem('hl_community_chat_messages', JSON.stringify(nextMsgs));
         }
       }
+    } catch {}
+
+    // Notifica backend para sincronizar usuário globalmente
+    try {
+      await fetch('/api/global/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: updatedUser }),
+      });
     } catch {}
   };
 
@@ -542,8 +578,177 @@ export default function App() {
     ? customSymbols.find((s) => s.id === symbolConfig.selectedMascotSymbolId) || customSymbols[0]
     : null;
 
-  const handleToggleEventStatus = (eventId: string) => {
+  // Real-time Global Store Likes & Product Likes State
+  const [storeLikes, setStoreLikes] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('hl_store_likes_zeroed');
+      if (saved !== null) return Math.max(0, Number(saved));
+    } catch {}
+    return 0;
+  });
+
+  const [productLikes, setProductLikes] = useState<Record<string, number>>({});
+
+  const handleToggleStoreLike = async (isLiked: boolean) => {
     sounds.playPop();
+    const change = isLiked ? 1 : -1;
+    setStoreLikes((prev) => {
+      const updated = Math.max(0, prev + change);
+      localStorage.setItem('hl_store_likes_zeroed', updated.toString());
+      return updated;
+    });
+    try {
+      await fetch('/api/global/likes/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ change }),
+      });
+    } catch {}
+  };
+
+  // Motor Global de Sincronização em Tempo Real (SSE + Polling de segurança)
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+    let pollInterval: any = null;
+
+    const syncWithServer = async () => {
+      try {
+        const res = await fetch('/api/global/state');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          const deletedIds: string[] = Array.isArray(data.deletedUserIds) ? data.deletedUserIds : [];
+          if (deletedIds.length > 0) {
+            localStorage.setItem('hl_deleted_user_ids', JSON.stringify(deletedIds));
+          }
+          if (Array.isArray(data.schoolEvents)) setSchoolEvents(data.schoolEvents);
+          if (Array.isArray(data.stories)) setStories(data.stories);
+          if (typeof data.storeLikes === 'number') setStoreLikes(data.storeLikes);
+          if (data.productLikes && typeof data.productLikes === 'object') setProductLikes(data.productLikes);
+          if (data.storeConfig && typeof data.storeConfig === 'object') {
+            setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
+          }
+          if (Array.isArray(data.users) && data.users.length > 0) {
+            setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
+          }
+        }
+      } catch {}
+    };
+
+    syncWithServer();
+    pollInterval = setInterval(syncWithServer, 8000);
+
+    try {
+      eventSource = new EventSource('/api/radio/stream');
+
+      eventSource.addEventListener('global_init', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data) {
+            const deletedIds: string[] = Array.isArray(data.deletedUserIds) ? data.deletedUserIds : [];
+            if (deletedIds.length > 0) {
+              localStorage.setItem('hl_deleted_user_ids', JSON.stringify(deletedIds));
+            }
+            if (Array.isArray(data.schoolEvents)) setSchoolEvents(data.schoolEvents);
+            if (Array.isArray(data.stories)) setStories(data.stories);
+            if (typeof data.storeLikes === 'number') setStoreLikes(data.storeLikes);
+            if (data.productLikes) setProductLikes(data.productLikes);
+            if (data.storeConfig) setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
+            if (Array.isArray(data.users)) setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
+          }
+        } catch {}
+      });
+
+      eventSource.addEventListener('events_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (Array.isArray(data)) setSchoolEvents(data);
+        } catch {}
+      });
+
+      eventSource.addEventListener('stories_updated', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (Array.isArray(data)) setStories(data);
+        } catch {}
+      });
+
+      eventSource.addEventListener('story_added', (e: MessageEvent) => {
+        try {
+          const story = JSON.parse(e.data);
+          if (story && story.id) {
+            setStories((prev) => [story, ...prev.filter((s) => s.id !== story.id)]);
+          }
+        } catch {}
+      });
+
+      eventSource.addEventListener('story_liked', (e: MessageEvent) => {
+        try {
+          const { storyId, likes } = JSON.parse(e.data);
+          if (storyId) {
+            setStories((prev) =>
+              prev.map((s) => (s.id === storyId ? { ...s, likes: typeof likes === 'number' ? likes : s.likes + 1 } : s))
+            );
+          }
+        } catch {}
+      });
+
+      eventSource.addEventListener('store_likes_updated', (e: MessageEvent) => {
+        try {
+          const count = JSON.parse(e.data);
+          if (typeof count === 'number') setStoreLikes(count);
+        } catch {}
+      });
+
+      eventSource.addEventListener('product_likes_updated', (e: MessageEvent) => {
+        try {
+          const pLikes = JSON.parse(e.data);
+          if (pLikes) setProductLikes(pLikes);
+        } catch {}
+      });
+
+      eventSource.addEventListener('config_updated', (e: MessageEvent) => {
+        try {
+          const cfg = JSON.parse(e.data);
+          if (cfg) setStoreConfig((prev) => ({ ...prev, ...cfg }));
+        } catch {}
+      });
+
+      eventSource.addEventListener('users_updated', (e: MessageEvent) => {
+        try {
+          const updatedUsers = JSON.parse(e.data);
+          if (Array.isArray(updatedUsers)) {
+            const deletedIds: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+            setUsers(updatedUsers.filter((u: any) => !deletedIds.includes(u.id)));
+          }
+        } catch {}
+      });
+
+      eventSource.addEventListener('user_deleted', (e: MessageEvent) => {
+        try {
+          const { userId } = JSON.parse(e.data);
+          if (userId) {
+            const existingDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+            if (!existingDeleted.includes(userId)) {
+              existingDeleted.push(userId);
+              localStorage.setItem('hl_deleted_user_ids', JSON.stringify(existingDeleted));
+            }
+            setUsers((prev) => prev.filter((u) => u.id !== userId));
+            setStories((prev) => prev.filter((s) => s.authorId !== userId));
+          }
+        } catch {}
+      });
+    } catch {}
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, []);
+
+  const handleToggleEventStatus = async (eventId: string) => {
+    sounds.playPop();
+    const stoppedBy = currentUser?.name || 'Administrador';
     setSchoolEvents((prev) =>
       prev.map((ev) => {
         if (ev.id === eventId) {
@@ -552,20 +757,41 @@ export default function App() {
             ...ev,
             active: nextActive,
             stoppedAt: nextActive ? undefined : new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            stoppedBy: nextActive ? undefined : (currentUser?.name || 'Administrador')
+            stoppedBy: nextActive ? undefined : stoppedBy
           };
         }
         return ev;
       })
     );
+    try {
+      await fetch('/api/global/events/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId, stoppedBy }),
+      });
+    } catch {}
   };
 
-  const handleAddSchoolEvent = (event: SchoolEvent) => {
-    setSchoolEvents((prev) => [event, ...prev]);
+  const handleAddSchoolEvent = async (event: SchoolEvent) => {
+    sounds.playSuccess();
+    setSchoolEvents((prev) => [event, ...prev.filter((e) => e.id !== event.id)]);
+    try {
+      await fetch('/api/global/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event }),
+      });
+    } catch {}
   };
 
-  const handleRemoveSchoolEvent = (eventId: string) => {
+  const handleRemoveSchoolEvent = async (eventId: string) => {
+    sounds.playPop();
     setSchoolEvents((prev) => prev.filter((ev) => ev.id !== eventId));
+    try {
+      await fetch(`/api/global/events/${eventId}`, {
+        method: 'DELETE',
+      });
+    } catch {}
   };
 
   const handleAddReview = (review: Omit<SchoolReview, 'id' | 'date' | 'likes'>) => {
@@ -686,24 +912,31 @@ export default function App() {
     );
   };
 
-  // Stories Likes & Add
-  const handleLikeStory = (storyId: string) => {
+  // Stories Likes & Add (Sincronizado globalmente no servidor)
+  const handleLikeStory = async (storyId: string) => {
+    sounds.playPop();
     setStories((prev) =>
       prev.map((s) => {
         if (s.id === storyId) {
           setUsers((prevUsers) =>
             prevUsers.map((u) =>
-              u.id === s.authorId ? { ...u, likesReceived: u.likesReceived + 1 } : u
+              u.id === s.authorId ? { ...u, likesReceived: (u.likesReceived || 0) + 1 } : u
             )
           );
-          return { ...s, likes: s.likes + 1 };
+          return { ...s, likes: (s.likes || 0) + 1 };
         }
         return s;
       })
     );
+    try {
+      await fetch(`/api/global/stories/${storyId}/like`, {
+        method: 'POST',
+      });
+    } catch {}
   };
 
-  const handleAddStory = (newStory: Omit<StatusStory, 'id' | 'timestamp' | 'likes'>) => {
+  const handleAddStory = async (newStory: Omit<StatusStory, 'id' | 'timestamp' | 'likes'>) => {
+    sounds.playSuccess();
     const fullStory: StatusStory = {
       ...newStory,
       id: `story-${Date.now()}`,
@@ -711,6 +944,13 @@ export default function App() {
       likes: 1,
     };
     setStories((prev) => [fullStory, ...prev]);
+    try {
+      await fetch('/api/global/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ story: fullStory }),
+      });
+    } catch {}
   };
 
   // Follow / Unfollow
@@ -831,6 +1071,9 @@ export default function App() {
         activeMode={lightShowMode}
         onClose={() => setLightShowMode(null)}
       />
+
+      {/* Global Real-time Announcement Overlay com foto do João Lucas e fanfarra oficial */}
+      <GlobalAnnouncementOverlay />
 
       {/* Main Responsive Navigation with Tab Bar */}
       <Navbar
@@ -965,11 +1208,13 @@ export default function App() {
                 />
               </div>
 
-              {/* Engagement Metrics Banner: Total de Likes 1400, Vendas Entregues 223, Seguidores Ativos 372, Escola Gilvan 100% Top */}
+              {/* Engagement Metrics Banner: Total de Likes dinâmico sincronizado em tempo real */}
               <StoreEngagementMetrics
                 orders={orders}
                 onOpenLeaderboard={() => setCurrentTab('leaderboard')}
                 onOpenOrderModal={() => setIsOrderModalOpen(true)}
+                globalStoreLikes={storeLikes}
+                onToggleGlobalLike={handleToggleStoreLike}
               />
 
               {/* 2. PRODUTOS E CATÁLOGO */}
@@ -1149,6 +1394,7 @@ export default function App() {
                 onUpdateCoupons={setCoupons}
                 onTriggerLightShow={handleTriggerLightShow}
                 onDeleteUser={handleDeleteUser}
+                onUpdateUserProfile={handleUpdateUserProfile}
                 onUpdateUserAvatar={handleSaveAvatar}
                 symbolConfig={symbolConfig}
                 customSymbols={customSymbols}

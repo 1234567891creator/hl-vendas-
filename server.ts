@@ -1,15 +1,17 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import { INITIAL_USERS, INITIAL_STORIES, INITIAL_SCHOOL_EVENTS, INITIAL_STORE_CONFIG } from "./src/data/initialData";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
 
 // Lazy-initialize GoogleGenAI client
 let aiClient: GoogleGenAI | null = null;
@@ -234,8 +236,69 @@ app.post("/api/orders/notify", (req, res) => {
 });
 
 // =========================================================================
-// RÁDIO AO VIVO MULTI-USUÁRIO: QUANDO O ADM TOCA UMA MÚSICA, TODOS ESCUTAM
+// SISTEMA DE SINCRONIZAÇÃO GLOBAL EM TEMPO REAL (HL VENDAS GLOBAL SYNC)
+// Sincroniza eventos escolares, stories, curtidas, aviso global e perfis entre todos os visitantes e dispositivos
 // =========================================================================
+interface GlobalServerState {
+  schoolEvents: any[];
+  stories: any[];
+  storeLikes: number;
+  productLikes: Record<string, number>;
+  storeConfig: any;
+  users: any[];
+  deletedUserIds: string[];
+}
+
+const STORAGE_DIR = path.join(process.cwd(), "data");
+const STORAGE_FILE = path.join(STORAGE_DIR, "global_state.json");
+
+function loadPersistedState(): GlobalServerState {
+  try {
+    if (!fs.existsSync(STORAGE_DIR)) {
+      fs.mkdirSync(STORAGE_DIR, { recursive: true });
+    }
+    if (fs.existsSync(STORAGE_FILE)) {
+      const raw = fs.readFileSync(STORAGE_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return {
+          schoolEvents: Array.isArray(parsed.schoolEvents) && parsed.schoolEvents.length > 0 ? parsed.schoolEvents : INITIAL_SCHOOL_EVENTS,
+          stories: Array.isArray(parsed.stories) && parsed.stories.length > 0 ? parsed.stories : INITIAL_STORIES,
+          storeLikes: typeof parsed.storeLikes === "number" ? parsed.storeLikes : 0,
+          productLikes: parsed.productLikes && typeof parsed.productLikes === "object" ? parsed.productLikes : {},
+          storeConfig: parsed.storeConfig && typeof parsed.storeConfig === "object" ? { ...INITIAL_STORE_CONFIG, ...parsed.storeConfig } : INITIAL_STORE_CONFIG,
+          users: Array.isArray(parsed.users) && parsed.users.length > 0 ? parsed.users : INITIAL_USERS,
+          deletedUserIds: Array.isArray(parsed.deletedUserIds) ? parsed.deletedUserIds : [],
+        };
+      }
+    }
+  } catch (err) {
+    console.error("[STORAGE LOAD ERROR]", err);
+  }
+  return {
+    schoolEvents: INITIAL_SCHOOL_EVENTS,
+    stories: INITIAL_STORIES,
+    storeLikes: 0,
+    productLikes: {},
+    storeConfig: INITIAL_STORE_CONFIG,
+    users: INITIAL_USERS,
+    deletedUserIds: [],
+  };
+}
+
+let globalServerState: GlobalServerState = loadPersistedState();
+
+function persistState() {
+  try {
+    if (!fs.existsSync(STORAGE_DIR)) {
+      fs.mkdirSync(STORAGE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STORAGE_FILE, JSON.stringify(globalServerState, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[STORAGE SAVE ERROR]", err);
+  }
+}
+
 interface LiveRadioState {
   isPlaying: boolean;
   youtubeId: string;
@@ -275,15 +338,19 @@ let activeAnnouncement: GlobalAnnouncementData | null = null;
 
 const radioSseClients = new Set<express.Response>();
 
-function broadcastAnnouncement(announcement: GlobalAnnouncementData) {
-  const data = `event: announcement\ndata: ${JSON.stringify(announcement)}\n\n`;
+function broadcastGlobalEvent(eventName: string, data: any) {
+  const message = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of radioSseClients) {
     try {
-      client.write(data);
+      client.write(message);
     } catch {
       radioSseClients.delete(client);
     }
   }
+}
+
+function broadcastAnnouncement(announcement: GlobalAnnouncementData) {
+  broadcastGlobalEvent("announcement", announcement);
 }
 
 function broadcastRadioState(event: string = "update") {
@@ -292,14 +359,7 @@ function broadcastRadioState(event: string = "update") {
     ...liveRadioState,
     listenersCount: count,
   };
-  const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const client of radioSseClients) {
-    try {
-      client.write(data);
-    } catch {
-      radioSseClients.delete(client);
-    }
-  }
+  broadcastGlobalEvent(event, payload);
 }
 
 // Obter estado atual da rádio (polling ou inicialização)
@@ -347,6 +407,289 @@ app.post("/api/radio/broadcast", (req, res) => {
   });
 });
 
+// =========================================================================
+// ROTAS DE SINCRONIZAÇÃO GLOBAL EM TEMPO REAL
+// =========================================================================
+
+// 1. Obter estado global completo (para inicialização rápida de novos visitantes e reconexão)
+app.get("/api/global/state", (_req, res) => {
+  res.json({
+    schoolEvents: globalServerState.schoolEvents,
+    stories: globalServerState.stories,
+    storeLikes: globalServerState.storeLikes,
+    productLikes: globalServerState.productLikes,
+    storeConfig: globalServerState.storeConfig,
+    users: globalServerState.users,
+    deletedUserIds: globalServerState.deletedUserIds,
+    activeAnnouncement: activeAnnouncement,
+  });
+});
+
+// 2. Stories Globais: Postar novo story / status (persistido no servidor e broadcast para todos)
+app.post("/api/global/stories", (req, res) => {
+  try {
+    const { story } = req.body;
+    if (!story) return res.status(400).json({ error: "Story é obrigatório" });
+
+    const fullStory = {
+      ...story,
+      id: story.id || `story-${Date.now()}`,
+      timestamp: story.timestamp || "Agora",
+      likes: typeof story.likes === "number" ? story.likes : 1,
+    };
+
+    // Insere no topo da lista global
+    globalServerState.stories = [fullStory, ...globalServerState.stories.filter((s) => s.id !== fullStory.id)];
+    persistState();
+
+    broadcastGlobalEvent("story_added", fullStory);
+    broadcastGlobalEvent("stories_updated", globalServerState.stories);
+
+    console.log(`[GLOBAL STORY POSTADO] Por ${fullStory.authorName}: "${fullStory.caption?.slice(0, 50)}..."`);
+    res.json({ success: true, story: fullStory, stories: globalServerState.stories });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao postar story";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 3. Curtir Story Globalmente (atualiza likes no story e no autor em tempo real para todos)
+app.post("/api/global/stories/:id/like", (req, res) => {
+  try {
+    const storyId = req.params.id;
+    let targetStory: any = null;
+
+    globalServerState.stories = globalServerState.stories.map((s) => {
+      if (s.id === storyId) {
+        targetStory = { ...s, likes: (s.likes || 0) + 1 };
+        return targetStory;
+      }
+      return s;
+    });
+
+    if (targetStory) {
+      // Incrementa os likes recebidos do autor se for usuário cadastrado
+      if (targetStory.authorId) {
+        globalServerState.users = globalServerState.users.map((u) => {
+          if (u.id === targetStory.authorId) {
+            return { ...u, likesReceived: (u.likesReceived || 0) + 1 };
+          }
+          return u;
+        });
+      }
+
+      persistState();
+      broadcastGlobalEvent("story_liked", {
+        storyId,
+        likes: targetStory.likes,
+        authorId: targetStory.authorId,
+      });
+      broadcastGlobalEvent("stories_updated", globalServerState.stories);
+      broadcastGlobalEvent("users_updated", globalServerState.users);
+
+      return res.json({ success: true, story: targetStory });
+    }
+
+    res.status(404).json({ error: "Story não encontrado" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao curtir story";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 4. Eventos Escolares Globais: Adicionar / Atualizar lista de eventos
+app.post("/api/global/events", (req, res) => {
+  try {
+    const { event, events } = req.body;
+
+    if (Array.isArray(events)) {
+      globalServerState.schoolEvents = events;
+    } else if (event) {
+      const fullEvent = {
+        ...event,
+        id: event.id || `ev-${Date.now()}`,
+        active: event.active !== false,
+      };
+      globalServerState.schoolEvents = [
+        fullEvent,
+        ...globalServerState.schoolEvents.filter((e) => e.id !== fullEvent.id),
+      ];
+    }
+
+    persistState();
+    broadcastGlobalEvent("events_updated", globalServerState.schoolEvents);
+
+    console.log(`[GLOBAL EVENTOS ATUALIZADOS] Total: ${globalServerState.schoolEvents.length} eventos ativos/cadastrados.`);
+    res.json({ success: true, events: globalServerState.schoolEvents });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao atualizar eventos";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 5. Alternar status de Evento Escolar (Ativar / Parar evento continuamente)
+app.post("/api/global/events/toggle", (req, res) => {
+  try {
+    const { eventId, stoppedBy } = req.body;
+    globalServerState.schoolEvents = globalServerState.schoolEvents.map((ev) => {
+      if (ev.id === eventId) {
+        const nextActive = ev.active === false;
+        return {
+          ...ev,
+          active: nextActive,
+          stoppedAt: nextActive
+            ? undefined
+            : new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+          stoppedBy: nextActive ? undefined : stoppedBy || "Administrador",
+        };
+      }
+      return ev;
+    });
+
+    persistState();
+    broadcastGlobalEvent("events_updated", globalServerState.schoolEvents);
+    res.json({ success: true, events: globalServerState.schoolEvents });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao alternar status do evento";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 6. Excluir Evento Escolar
+app.delete("/api/global/events/:id", (req, res) => {
+  try {
+    const eventId = req.params.id;
+    globalServerState.schoolEvents = globalServerState.schoolEvents.filter((e) => e.id !== eventId);
+    persistState();
+    broadcastGlobalEvent("events_updated", globalServerState.schoolEvents);
+    res.json({ success: true, events: globalServerState.schoolEvents });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao remover evento";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 7. Curtidas Globais da Loja (HL Vendas - Total de Likes)
+app.post("/api/global/likes/store", (req, res) => {
+  try {
+    const { change } = req.body;
+    const delta = typeof change === "number" ? change : 1;
+    globalServerState.storeLikes = Math.max(0, globalServerState.storeLikes + delta);
+    persistState();
+
+    broadcastGlobalEvent("store_likes_updated", globalServerState.storeLikes);
+    console.log(`[GLOBAL LIKES LOJA] Novo total: ${globalServerState.storeLikes}`);
+    res.json({ success: true, storeLikes: globalServerState.storeLikes });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao atualizar curtidas";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 8. Curtidas Globais de Produtos
+app.post("/api/global/likes/product", (req, res) => {
+  try {
+    const { productId, change } = req.body;
+    if (!productId) return res.status(400).json({ error: "productId é obrigatório" });
+
+    const current = globalServerState.productLikes[productId] || 0;
+    const delta = typeof change === "number" ? change : 1;
+    const nextVal = Math.max(0, current + delta);
+    globalServerState.productLikes[productId] = nextVal;
+    persistState();
+
+    broadcastGlobalEvent("product_likes_updated", globalServerState.productLikes);
+    res.json({ success: true, productLikes: globalServerState.productLikes });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao curtir produto";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 9. Configurações Globais da Loja (Comunicados, Fundo YouTube, etc.)
+app.post("/api/global/config", (req, res) => {
+  try {
+    const { config } = req.body;
+    if (!config || typeof config !== "object") {
+      return res.status(400).json({ error: "config é obrigatório" });
+    }
+
+    globalServerState.storeConfig = {
+      ...globalServerState.storeConfig,
+      ...config,
+    };
+    persistState();
+
+    broadcastGlobalEvent("config_updated", globalServerState.storeConfig);
+    console.log(`[GLOBAL CONFIG ATUALIZADA] Fundo YouTube: ${globalServerState.storeConfig.siteYoutubeBgActive ? "ATIVO" : "DESATIVADO"} | Aviso: ${globalServerState.storeConfig.globalAnnouncementActive ? "ATIVO" : "INATIVO"}`);
+    res.json({ success: true, storeConfig: globalServerState.storeConfig });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao atualizar config";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 10. Usuários Globais: Sincronizar criação, senhas e nomes
+app.post("/api/global/users", (req, res) => {
+  try {
+    const { users, user } = req.body;
+
+    if (Array.isArray(users)) {
+      globalServerState.users = users;
+    } else if (user) {
+      const exists = globalServerState.users.some((u) => u.id === user.id);
+      if (exists) {
+        globalServerState.users = globalServerState.users.map((u) => (u.id === user.id ? user : u));
+      } else {
+        globalServerState.users.push(user);
+      }
+    }
+
+    persistState();
+    broadcastGlobalEvent("users_updated", globalServerState.users);
+    res.json({ success: true, users: globalServerState.users });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao salvar usuários";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// 11. Usuários Globais: Exclusão definitiva sem erros
+app.post("/api/global/users/delete", (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "userId é obrigatório" });
+
+    // Proteger a conta raiz original do João Lucas
+    if (userId === "user-joao-lucas") {
+      return res.status(403).json({ error: "A conta raiz de João Lucas não pode ser excluída." });
+    }
+
+    // Remove o usuário da lista global
+    globalServerState.users = globalServerState.users.filter((u) => u.id !== userId);
+
+    // Registra na lista negra de excluídos para nunca mais reaparecer em nenhum cliente
+    if (!globalServerState.deletedUserIds.includes(userId)) {
+      globalServerState.deletedUserIds.push(userId);
+    }
+
+    // Remove stories deste usuário
+    globalServerState.stories = globalServerState.stories.filter((s) => s.authorId !== userId);
+
+    persistState();
+
+    broadcastGlobalEvent("user_deleted", { userId });
+    broadcastGlobalEvent("users_updated", globalServerState.users);
+    broadcastGlobalEvent("stories_updated", globalServerState.stories);
+
+    console.log(`[CONTA EXCLUÍDA GLOBALMENTE] ID: ${userId} removido de todos os nós.`);
+    res.json({ success: true, deletedUserId: userId, users: globalServerState.users });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao excluir conta";
+    res.status(500).json({ error: msg });
+  }
+});
+
 // Consultar anúncio global ativo no momento (polling ou checagem inicial)
 app.get("/api/announcement/current", (_req, res) => {
   if (activeAnnouncement) {
@@ -387,7 +730,19 @@ app.post("/api/announcement/broadcast", (req, res) => {
     priority: priority || "golden",
   };
 
+  // Também persiste na storeConfig global
+  globalServerState.storeConfig = {
+    ...globalServerState.storeConfig,
+    globalAnnouncement: activeAnnouncement.message,
+    globalAnnouncementActive: true,
+    globalAnnouncementSenderName: activeAnnouncement.senderName,
+    globalAnnouncementSenderAvatar: activeAnnouncement.senderPhoto,
+    globalAnnouncementCreatedAt: activeAnnouncement.createdAt,
+  };
+  persistState();
+
   broadcastAnnouncement(activeAnnouncement);
+  broadcastGlobalEvent("config_updated", globalServerState.storeConfig);
 
   console.log(`[ANÚNCIO GLOBAL DISPARADO] Por ${activeAnnouncement.senderName}: "${activeAnnouncement.message}" (${duration}ms)`);
 
@@ -410,12 +765,25 @@ app.get("/api/radio/stream", (req, res) => {
 
   radioSseClients.add(res);
 
-  // Enviar estado inicial imediatamente
+  // Enviar estado inicial da rádio imediatamente
   const initialPayload = {
     ...liveRadioState,
     listenersCount: Math.max(1, radioSseClients.size),
   };
   res.write(`event: init\ndata: ${JSON.stringify(initialPayload)}\n\n`);
+
+  // Enviar ESTADO GLOBAL COMPLETO para o cliente recém conectado (eventos, stories, likes, configs, users)
+  const globalSyncPayload = {
+    schoolEvents: globalServerState.schoolEvents,
+    stories: globalServerState.stories,
+    storeLikes: globalServerState.storeLikes,
+    productLikes: globalServerState.productLikes,
+    storeConfig: globalServerState.storeConfig,
+    users: globalServerState.users,
+    deletedUserIds: globalServerState.deletedUserIds,
+    activeAnnouncement: activeAnnouncement,
+  };
+  res.write(`event: global_init\ndata: ${JSON.stringify(globalSyncPayload)}\n\n`);
 
   // Se houver anúncio global ativo no momento, enviar para o cliente recém-conectado
   if (activeAnnouncement && Date.now() - activeAnnouncement.createdAt < activeAnnouncement.durationMs) {
