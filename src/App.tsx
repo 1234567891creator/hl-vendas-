@@ -77,6 +77,113 @@ import { GlobalAnnouncementOverlay } from './components/GlobalAnnouncementOverla
 
 import { detectCurrentDevice } from './utils/deviceDetector';
 import { sounds } from './utils/audioEffects';
+import { getApiUrl, fetchWithFallback } from './utils/apiConfig';
+
+/**
+ * Sintetizador Web Audio API para notificações sonoras personalizadas
+ * Diferencia claramente alertas solenes de anúncios globais e eventos especiais de mensagens comuns
+ */
+export const playSoundEffect = (
+  type: 'global_announcement' | 'special_event' | 'urgent_alert' | 'subtle_notify' = 'global_announcement'
+) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const ctx = (window as any).__hl_audio_ctx || new AudioCtx();
+    (window as any).__hl_audio_ctx = ctx;
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    const now = ctx.currentTime;
+
+    if (type === 'global_announcement') {
+      // Fanfarra dourada e nobre para anúncios globais solenes (Dó5 -> Mi5 -> Sol5 -> Dó6 + Harmônico reluzente)
+      const notes = [
+        { freq: 523.25, start: 0.00, dur: 0.18, vol: 0.22, osc: 'triangle' as OscillatorType },
+        { freq: 659.25, start: 0.12, dur: 0.20, vol: 0.24, osc: 'triangle' as OscillatorType },
+        { freq: 783.99, start: 0.24, dur: 0.22, vol: 0.26, osc: 'sine' as OscillatorType },
+        { freq: 1046.50, start: 0.38, dur: 0.55, vol: 0.28, osc: 'sine' as OscillatorType },
+        { freq: 2093.00, start: 0.40, dur: 0.45, vol: 0.10, osc: 'sine' as OscillatorType },
+      ];
+
+      notes.forEach(({ freq, start, dur, vol, osc }) => {
+        const oscNode = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscNode.type = osc;
+        oscNode.frequency.setValueAtTime(freq, now + start);
+
+        gainNode.gain.setValueAtTime(0.0001, now + start);
+        gainNode.gain.linearRampToValueAtTime(vol, now + start + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+
+        oscNode.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscNode.start(now + start);
+        oscNode.stop(now + start + dur + 0.05);
+      });
+    } else if (type === 'special_event') {
+      // Cascata cintilante rápida e festiva para eventos especiais e escolares
+      const chord = [659.25, 880.00, 1174.66, 1760.00];
+      chord.forEach((freq, idx) => {
+        const oscNode = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscNode.type = 'sine';
+        oscNode.frequency.setValueAtTime(freq, now + idx * 0.05);
+
+        gainNode.gain.setValueAtTime(0.0001, now + idx * 0.05);
+        gainNode.gain.linearRampToValueAtTime(0.18, now + idx * 0.05 + 0.015);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.05 + 0.22);
+
+        oscNode.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscNode.start(now + idx * 0.05);
+        oscNode.stop(now + idx * 0.05 + 0.25);
+      });
+    } else if (type === 'urgent_alert') {
+      // Pulso duplo de alerta urgente
+      [0.00, 0.15].forEach((startTime) => {
+        const oscNode = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscNode.type = 'sawtooth';
+        oscNode.frequency.setValueAtTime(880, now + startTime);
+        oscNode.frequency.exponentialRampToValueAtTime(440, now + startTime + 0.12);
+
+        gainNode.gain.setValueAtTime(0.12, now + startTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + startTime + 0.12);
+
+        oscNode.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscNode.start(now + startTime);
+        oscNode.stop(now + startTime + 0.13);
+      });
+    } else {
+      // subtle_notify: Som suave e discreto para mensagens comuns
+      const oscNode = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      oscNode.type = 'sine';
+      oscNode.frequency.setValueAtTime(440, now);
+      oscNode.frequency.exponentialRampToValueAtTime(660, now + 0.07);
+
+      gainNode.gain.setValueAtTime(0.10, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
+
+      oscNode.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      oscNode.start(now);
+      oscNode.stop(now + 0.08);
+    }
+  } catch {
+    // Protegido contra bloqueios de autoplay do navegador
+  }
+};
+
+if (typeof window !== 'undefined') {
+  (window as any).playSoundEffect = playSoundEffect;
+}
 
 export default function App() {
   // Navigation & View State (Tabs)
@@ -107,17 +214,21 @@ export default function App() {
 
   const [users, setUsers] = useState<UserProfile[]>(() => {
     try {
+      const deletedIds: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
       const saved = localStorage.getItem('hl_users');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((u: UserProfile) =>
-            u.email.toLowerCase() === 'joaolucasgp1234@gmail.com'
-              ? { ...u, password: 'hlvendas2026', isMaxAdmin: true }
-              : u
-          );
+          return parsed
+            .filter((u: UserProfile) => !deletedIds.includes(u.id))
+            .map((u: UserProfile) =>
+              u.email.toLowerCase() === 'joaolucasgp1234@gmail.com'
+                ? { ...u, password: 'hlvendas2026', isMaxAdmin: true }
+                : u
+            );
         }
       }
+      return INITIAL_USERS.filter((u) => !deletedIds.includes(u.id));
     } catch {}
     return INITIAL_USERS;
   });
@@ -168,7 +279,7 @@ export default function App() {
       localStorage.setItem('hl_store_config', JSON.stringify(newConfig));
     } catch {}
     try {
-      await fetch('/api/global/config', {
+      await fetchWithFallback('/api/global/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: newConfig }),
@@ -291,7 +402,7 @@ export default function App() {
 
     // 7. Notifica backend para sincronizar foto do perfil permanentemente para todos os servidores
     try {
-      fetch('/api/global/users', {
+      fetchWithFallback('/api/global/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: { id: userId, avatar: newAvatarUrl } }),
@@ -368,7 +479,7 @@ export default function App() {
 
     // 7. Notifica o backend para remover permanentemente e transmitir para todos os clientes
     try {
-      await fetch('/api/global/users/delete', {
+      await fetchWithFallback('/api/global/users/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
@@ -428,7 +539,7 @@ export default function App() {
 
     // Notifica backend para sincronizar usuário globalmente
     try {
-      await fetch('/api/global/users', {
+      await fetchWithFallback('/api/global/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: updatedUser }),
@@ -613,7 +724,7 @@ export default function App() {
       return updated;
     });
     try {
-      await fetch('/api/global/likes/store', {
+      await fetchWithFallback('/api/global/likes/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ change }),
@@ -621,21 +732,80 @@ export default function App() {
     } catch {}
   };
 
-  // Motor Global de Sincronização em Tempo Real (SSE + Polling de segurança)
+  // Motor Global de Sincronização em Tempo Real (SSE + Polling de segurança e Fallback Cloud Run)
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let pollInterval: any = null;
+    let broadcastChannel: BroadcastChannel | null = null;
+
+    try {
+      broadcastChannel = new BroadcastChannel('hl_vendas_sync_channel');
+      broadcastChannel.onmessage = (event) => {
+        if (event.data?.type === 'USER_DELETED' && event.data?.userId) {
+          const uid = event.data.userId;
+          setUsers((prev) => prev.filter((u) => u.id !== uid));
+        } else if (event.data?.type === 'ANNOUNCEMENT' && event.data?.announcement) {
+          const ann = event.data.announcement;
+          setStoreConfig((prev) => ({
+            ...prev,
+            globalAnnouncement: ann.message,
+            globalAnnouncementActive: true,
+            globalAnnouncementSenderName: ann.senderName || prev.globalAnnouncementSenderName,
+            globalAnnouncementSenderAvatar: ann.senderPhoto || prev.globalAnnouncementSenderAvatar,
+            globalAnnouncementCreatedAt: ann.createdAt || Date.now(),
+          }));
+          playSoundEffect('global_announcement');
+        }
+      };
+    } catch {}
 
     const syncWithServer = async () => {
       try {
-        const res = await fetch('/api/global/state');
+        const res = await fetchWithFallback('/api/global/state');
         if (!res.ok) return;
         const data = await res.json();
         if (data && typeof data === 'object') {
+          // 1. Tratamento rigoroso de contas excluídas
           const deletedIds: string[] = Array.isArray(data.deletedUserIds) ? data.deletedUserIds : [];
           if (deletedIds.length > 0) {
-            localStorage.setItem('hl_deleted_user_ids', JSON.stringify(deletedIds));
+            const localDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+            const mergedDeleted = Array.from(new Set([...localDeleted, ...deletedIds]));
+            localStorage.setItem('hl_deleted_user_ids', JSON.stringify(mergedDeleted));
+
+            setUsers((prev) => {
+              const clean = prev.filter((u) => !mergedDeleted.includes(u.id));
+              localStorage.setItem('hl_users', JSON.stringify(clean));
+              return clean;
+            });
+
+            setCurrentUser((curr) => {
+              if (curr && mergedDeleted.includes(curr.id)) {
+                localStorage.removeItem('hl_current_user');
+                return null;
+              }
+              return curr;
+            });
           }
+
+          // 2. Tratamento do Anúncio Global Oficial ativo
+          if (data.activeAnnouncement && data.activeAnnouncement.message) {
+            setStoreConfig((prev) => {
+              const next = {
+                ...prev,
+                globalAnnouncement: data.activeAnnouncement.message,
+                globalAnnouncementActive: true,
+                globalAnnouncementSenderName: data.activeAnnouncement.senderName || prev.globalAnnouncementSenderName || 'João Lucas (Adm Máximo)',
+                globalAnnouncementSenderAvatar: data.activeAnnouncement.senderPhoto || prev.globalAnnouncementSenderAvatar,
+                globalAnnouncementCreatedAt: data.activeAnnouncement.createdAt || Date.now(),
+              };
+              try {
+                localStorage.setItem('hl_config', JSON.stringify(next));
+                localStorage.setItem('hl_store_config', JSON.stringify(next));
+              } catch {}
+              return next;
+            });
+          }
+
           if (Array.isArray(data.schoolEvents)) setSchoolEvents(data.schoolEvents);
           if (Array.isArray(data.stories)) setStories(data.stories);
           if (typeof data.storeLikes === 'number') setStoreLikes(data.storeLikes);
@@ -643,8 +813,11 @@ export default function App() {
           if (data.storeConfig && typeof data.storeConfig === 'object') {
             setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
           }
-          if (Array.isArray(data.users) && data.users.length > 0) {
-            setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
+          if (Array.isArray(data.users)) {
+            const localDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+            const validUsers = data.users.filter((u: any) => !localDeleted.includes(u.id));
+            setUsers(validUsers);
+            localStorage.setItem('hl_users', JSON.stringify(validUsers));
           }
           if (Array.isArray(data.servers)) setServers(data.servers);
           if (Array.isArray(data.interServerPackets)) setRecentPackets(data.interServerPackets);
@@ -653,149 +826,318 @@ export default function App() {
     };
 
     syncWithServer();
-    pollInterval = setInterval(syncWithServer, 8000);
+    pollInterval = setInterval(syncWithServer, 3500);
 
-    try {
-      eventSource = new EventSource('/api/radio/stream');
+    // Mecanismo de Reconexão Exponencial para EventSource
+    let isComponentMounted = true;
+    let reconnectTimeout: any = null;
+    let retryDelay = 1000;
+    const maxRetryDelay = 30000;
 
-      eventSource.addEventListener('global_init', (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data) {
-            const deletedIds: string[] = Array.isArray(data.deletedUserIds) ? data.deletedUserIds : [];
-            if (deletedIds.length > 0) {
-              localStorage.setItem('hl_deleted_user_ids', JSON.stringify(deletedIds));
+    const connectEventSource = () => {
+      if (!isComponentMounted) return;
+
+      try {
+        if (eventSource) {
+          try {
+            eventSource.close();
+          } catch {}
+          eventSource = null;
+        }
+
+        const sseUrl = getApiUrl('/api/radio/stream');
+        eventSource = new EventSource(sseUrl);
+
+        eventSource.onopen = () => {
+          // Conexão reestabelecida com sucesso: reinicia a janela de recuo exponencial
+          retryDelay = 1000;
+          // Sincroniza dados imediatamente para recuperar qualquer evento emitido durante a desconexão
+          syncWithServer();
+        };
+
+        eventSource.onerror = () => {
+          if (!isComponentMounted) return;
+
+          // Fecha com segurança a conexão que caiu
+          if (eventSource) {
+            try {
+              eventSource.close();
+            } catch {}
+            eventSource = null;
+          }
+
+          // Contingência de resiliência: faz sync via HTTP fallback enquanto tenta reconectar o stream
+          syncWithServer();
+
+          // Calcula próximo tempo de reconexão exponencial com jitter
+          const jitter = Math.floor(Math.random() * 400);
+          const delayToUse = Math.min(retryDelay * 1.8, maxRetryDelay) + jitter;
+          retryDelay = Math.min(retryDelay * 1.8, maxRetryDelay);
+
+          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(() => {
+            if (isComponentMounted) {
+              connectEventSource();
             }
-            if (Array.isArray(data.schoolEvents)) setSchoolEvents(data.schoolEvents);
-            if (Array.isArray(data.stories)) setStories(data.stories);
-            if (typeof data.storeLikes === 'number') setStoreLikes(data.storeLikes);
-            if (data.productLikes) setProductLikes(data.productLikes);
-            if (data.storeConfig) setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
-            if (Array.isArray(data.users)) setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
-            if (Array.isArray(data.servers)) setServers(data.servers);
-            if (Array.isArray(data.interServerPackets)) setRecentPackets(data.interServerPackets);
-          }
-        } catch {}
-      });
+          }, delayToUse);
+        };
 
-      eventSource.addEventListener('events_updated', (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (Array.isArray(data)) setSchoolEvents(data);
-        } catch {}
-      });
+        eventSource.addEventListener('global_init', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data) {
+              const deletedIds: string[] = Array.isArray(data.deletedUserIds) ? data.deletedUserIds : [];
+              if (deletedIds.length > 0) {
+                const localDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+                const mergedDeleted = Array.from(new Set([...localDeleted, ...deletedIds]));
+                localStorage.setItem('hl_deleted_user_ids', JSON.stringify(mergedDeleted));
 
-      eventSource.addEventListener('stories_updated', (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (Array.isArray(data)) setStories(data);
-        } catch {}
-      });
+                setUsers((prev) => {
+                  const clean = prev.filter((u) => !mergedDeleted.includes(u.id));
+                  localStorage.setItem('hl_users', JSON.stringify(clean));
+                  return clean;
+                });
 
-      eventSource.addEventListener('story_added', (e: MessageEvent) => {
-        try {
-          const story = JSON.parse(e.data);
-          if (story && story.id) {
-            setStories((prev) => [story, ...prev.filter((s) => s.id !== story.id)]);
-          }
-        } catch {}
-      });
-
-      eventSource.addEventListener('story_liked', (e: MessageEvent) => {
-        try {
-          const { storyId, likes } = JSON.parse(e.data);
-          if (storyId) {
-            setStories((prev) =>
-              prev.map((s) => (s.id === storyId ? { ...s, likes: typeof likes === 'number' ? likes : s.likes + 1 } : s))
-            );
-          }
-        } catch {}
-      });
-
-      eventSource.addEventListener('store_likes_updated', (e: MessageEvent) => {
-        try {
-          const count = JSON.parse(e.data);
-          if (typeof count === 'number') setStoreLikes(count);
-        } catch {}
-      });
-
-      eventSource.addEventListener('product_likes_updated', (e: MessageEvent) => {
-        try {
-          const pLikes = JSON.parse(e.data);
-          if (pLikes) setProductLikes(pLikes);
-        } catch {}
-      });
-
-      eventSource.addEventListener('config_updated', (e: MessageEvent) => {
-        try {
-          const cfg = JSON.parse(e.data);
-          if (cfg) setStoreConfig((prev) => ({ ...prev, ...cfg }));
-        } catch {}
-      });
-
-      eventSource.addEventListener('users_updated', (e: MessageEvent) => {
-        try {
-          const updatedUsers = JSON.parse(e.data);
-          if (Array.isArray(updatedUsers)) {
-            const deletedIds: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
-            const validUsers = updatedUsers.filter((u: any) => !deletedIds.includes(u.id));
-            setUsers(validUsers);
-            localStorage.setItem('hl_users', JSON.stringify(validUsers));
-
-            // Sincronização permanente: se currentUser foi alterado, reflete na sessão imediatamente
-            setCurrentUser((prevCurrent) => {
-              if (!prevCurrent) return null;
-              const freshSelf = validUsers.find((u: any) => u.id === prevCurrent.id);
-              if (freshSelf) {
-                localStorage.setItem('hl_current_user', JSON.stringify(freshSelf));
-                return freshSelf;
+                setCurrentUser((curr) => {
+                  if (curr && mergedDeleted.includes(curr.id)) {
+                    localStorage.removeItem('hl_current_user');
+                    return null;
+                  }
+                  return curr;
+                });
               }
-              return prevCurrent;
-            });
-          }
-        } catch {}
-      });
 
-      eventSource.addEventListener('user_deleted', (e: MessageEvent) => {
-        try {
-          const { userId } = JSON.parse(e.data);
-          if (userId) {
-            const existingDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
-            if (!existingDeleted.includes(userId)) {
-              existingDeleted.push(userId);
-              localStorage.setItem('hl_deleted_user_ids', JSON.stringify(existingDeleted));
+              if (data.activeAnnouncement && data.activeAnnouncement.message) {
+                setStoreConfig((prev) => {
+                  const next = {
+                    ...prev,
+                    globalAnnouncement: data.activeAnnouncement.message,
+                    globalAnnouncementActive: true,
+                    globalAnnouncementSenderName: data.activeAnnouncement.senderName || prev.globalAnnouncementSenderName || 'João Lucas (Adm Máximo)',
+                    globalAnnouncementSenderAvatar: data.activeAnnouncement.senderPhoto || prev.globalAnnouncementSenderAvatar,
+                    globalAnnouncementCreatedAt: data.activeAnnouncement.createdAt || Date.now(),
+                  };
+                  try {
+                    localStorage.setItem('hl_config', JSON.stringify(next));
+                    localStorage.setItem('hl_store_config', JSON.stringify(next));
+                  } catch {}
+                  return next;
+                });
+              }
+
+              if (Array.isArray(data.schoolEvents)) setSchoolEvents(data.schoolEvents);
+              if (Array.isArray(data.stories)) setStories(data.stories);
+              if (typeof data.storeLikes === 'number') setStoreLikes(data.storeLikes);
+              if (data.productLikes) setProductLikes(data.productLikes);
+              if (data.storeConfig) setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
+              if (Array.isArray(data.users)) {
+                const localDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+                const clean = data.users.filter((u: any) => !localDeleted.includes(u.id));
+                setUsers(clean);
+                localStorage.setItem('hl_users', JSON.stringify(clean));
+              }
+              if (Array.isArray(data.servers)) setServers(data.servers);
+              if (Array.isArray(data.interServerPackets)) setRecentPackets(data.interServerPackets);
             }
-            setUsers((prev) => prev.filter((u) => u.id !== userId));
-            setStories((prev) => prev.filter((s) => s.authorId !== userId));
-          }
-        } catch {}
-      });
+          } catch {}
+        });
 
-      eventSource.addEventListener('servers_updated', (e: MessageEvent) => {
-        try {
-          const payload = JSON.parse(e.data);
-          if (payload && Array.isArray(payload.servers)) {
-            setServers(payload.servers);
-          }
-          if (payload && Array.isArray(payload.recentPackets)) {
-            setRecentPackets(payload.recentPackets);
-          }
-        } catch {}
-      });
+        // Ouvinte de Anúncios Globais em Tempo Real disparados pelo Adm Máximo
+        eventSource.addEventListener('announcement', (e: MessageEvent) => {
+          try {
+            const ann = JSON.parse(e.data);
+            if (ann && ann.message) {
+              setStoreConfig((prev) => {
+                const next = {
+                  ...prev,
+                  globalAnnouncement: ann.message,
+                  globalAnnouncementActive: true,
+                  globalAnnouncementSenderName: ann.senderName || prev.globalAnnouncementSenderName || 'João Lucas (Adm Máximo)',
+                  globalAnnouncementSenderAvatar: ann.senderPhoto || prev.globalAnnouncementSenderAvatar,
+                  globalAnnouncementCreatedAt: ann.createdAt || Date.now(),
+                };
+                try {
+                  localStorage.setItem('hl_config', JSON.stringify(next));
+                  localStorage.setItem('hl_store_config', JSON.stringify(next));
+                } catch {}
+                return next;
+              });
+              playSoundEffect('global_announcement');
+            }
+          } catch {}
+        });
 
-      eventSource.addEventListener('inter_server_packet', (e: MessageEvent) => {
-        try {
-          const pkt = JSON.parse(e.data);
-          if (pkt && pkt.id) {
-            setRecentPackets((prev) => [pkt, ...prev.filter((p) => p.id !== pkt.id)].slice(0, 50));
-          }
-        } catch {}
-      });
-    } catch {}
+        eventSource.addEventListener('events_updated', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (Array.isArray(data)) {
+              setSchoolEvents(data);
+              playSoundEffect('special_event');
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('stories_updated', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (Array.isArray(data)) setStories(data);
+          } catch {}
+        });
+
+        eventSource.addEventListener('story_added', (e: MessageEvent) => {
+          try {
+            const story = JSON.parse(e.data);
+            if (story && story.id) {
+              setStories((prev) => [story, ...prev.filter((s) => s.id !== story.id)]);
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('story_liked', (e: MessageEvent) => {
+          try {
+            const { storyId, likes } = JSON.parse(e.data);
+            if (storyId) {
+              setStories((prev) =>
+                prev.map((s) => (s.id === storyId ? { ...s, likes: typeof likes === 'number' ? likes : s.likes + 1 } : s))
+              );
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('store_likes_updated', (e: MessageEvent) => {
+          try {
+            const count = JSON.parse(e.data);
+            if (typeof count === 'number') setStoreLikes(count);
+          } catch {}
+        });
+
+        eventSource.addEventListener('product_likes_updated', (e: MessageEvent) => {
+          try {
+            const pLikes = JSON.parse(e.data);
+            if (pLikes) setProductLikes(pLikes);
+          } catch {}
+        });
+
+        eventSource.addEventListener('config_updated', (e: MessageEvent) => {
+          try {
+            const cfg = JSON.parse(e.data);
+            if (cfg) setStoreConfig((prev) => ({ ...prev, ...cfg }));
+          } catch {}
+        });
+
+        eventSource.addEventListener('users_updated', (e: MessageEvent) => {
+          try {
+            const updatedUsers = JSON.parse(e.data);
+            if (Array.isArray(updatedUsers)) {
+              const deletedIds: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+              const validUsers = updatedUsers.filter((u: any) => !deletedIds.includes(u.id));
+              setUsers(validUsers);
+              localStorage.setItem('hl_users', JSON.stringify(validUsers));
+
+              // Sincronização permanente: se currentUser foi alterado, reflete na sessão imediatamente
+              setCurrentUser((prevCurrent) => {
+                if (!prevCurrent) return null;
+                if (deletedIds.includes(prevCurrent.id)) {
+                  localStorage.removeItem('hl_current_user');
+                  return null;
+                }
+                const freshSelf = validUsers.find((u: any) => u.id === prevCurrent.id);
+                if (freshSelf) {
+                  localStorage.setItem('hl_current_user', JSON.stringify(freshSelf));
+                  return freshSelf;
+                }
+                return prevCurrent;
+              });
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('user_deleted', (e: MessageEvent) => {
+          try {
+            const { userId } = JSON.parse(e.data);
+            if (userId) {
+              const existingDeleted: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
+              if (!existingDeleted.includes(userId)) {
+                existingDeleted.push(userId);
+                localStorage.setItem('hl_deleted_user_ids', JSON.stringify(existingDeleted));
+              }
+              setUsers((prev) => {
+                const clean = prev.filter((u) => u.id !== userId);
+                localStorage.setItem('hl_users', JSON.stringify(clean));
+                return clean;
+              });
+              setStories((prev) => {
+                const clean = prev.filter((s) => s.authorId !== userId);
+                localStorage.setItem('hl_stories', JSON.stringify(clean));
+                return clean;
+              });
+              setCustomSymbols((prev) => {
+                const clean = prev.filter((sym: any) => sym.creatorId !== userId && sym.authorId !== userId);
+                localStorage.setItem('hl_custom_symbols', JSON.stringify(clean));
+                return clean;
+              });
+              setReviews((prev) => {
+                const clean = prev.filter((r) => r.authorId !== userId);
+                localStorage.setItem('hl_reviews', JSON.stringify(clean));
+                return clean;
+              });
+              setCurrentUser((curr) => {
+                if (curr && curr.id === userId) {
+                  localStorage.removeItem('hl_current_user');
+                  return null;
+                }
+                return curr;
+              });
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('servers_updated', (e: MessageEvent) => {
+          try {
+            const payload = JSON.parse(e.data);
+            if (payload && Array.isArray(payload.servers)) {
+              setServers(payload.servers);
+            }
+            if (payload && Array.isArray(payload.recentPackets)) {
+              setRecentPackets(payload.recentPackets);
+            }
+          } catch {}
+        });
+
+        eventSource.addEventListener('inter_server_packet', (e: MessageEvent) => {
+          try {
+            const pkt = JSON.parse(e.data);
+            if (pkt && pkt.id) {
+              setRecentPackets((prev) => [pkt, ...prev.filter((p) => p.id !== pkt.id)].slice(0, 50));
+              if (pkt.action === 'global_announcement') {
+                playSoundEffect('global_announcement');
+              } else if (pkt.action === 'admin_directive') {
+                playSoundEffect('urgent_alert');
+              }
+            }
+          } catch {}
+        });
+      } catch (err) {
+        console.warn('Falha ao instanciar EventSource:', err);
+      }
+    };
+
+    connectEventSource();
 
     return () => {
-      if (eventSource) eventSource.close();
+      isComponentMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (eventSource) {
+        try {
+          eventSource.close();
+        } catch {}
+      }
       if (pollInterval) clearInterval(pollInterval);
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.close();
+        } catch {}
+      }
     };
   }, []);
 
@@ -805,7 +1147,7 @@ export default function App() {
   ): Promise<boolean> => {
     try {
       sounds.playSparkle();
-      const res = await fetch('/api/servers/dispatch', {
+      const res = await fetchWithFallback('/api/servers/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -837,7 +1179,7 @@ export default function App() {
   const handleForceProfileSync = async () => {
     try {
       sounds.playPop();
-      await fetch('/api/global/users', {
+      await fetchWithFallback('/api/global/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ users }),
@@ -848,7 +1190,7 @@ export default function App() {
   };
 
   const handleToggleEventStatus = async (eventId: string) => {
-    sounds.playPop();
+    playSoundEffect('special_event');
     const stoppedBy = currentUser?.name || 'Administrador';
     setSchoolEvents((prev) =>
       prev.map((ev) => {
@@ -865,7 +1207,7 @@ export default function App() {
       })
     );
     try {
-      await fetch('/api/global/events/toggle', {
+      await fetchWithFallback('/api/global/events/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId, stoppedBy }),
@@ -874,10 +1216,10 @@ export default function App() {
   };
 
   const handleAddSchoolEvent = async (event: SchoolEvent) => {
-    sounds.playSuccess();
+    playSoundEffect('special_event');
     setSchoolEvents((prev) => [event, ...prev.filter((e) => e.id !== event.id)]);
     try {
-      await fetch('/api/global/events', {
+      await fetchWithFallback('/api/global/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ event }),
@@ -889,7 +1231,7 @@ export default function App() {
     sounds.playPop();
     setSchoolEvents((prev) => prev.filter((ev) => ev.id !== eventId));
     try {
-      await fetch(`/api/global/events/${eventId}`, {
+      await fetchWithFallback(`/api/global/events/${eventId}`, {
         method: 'DELETE',
       });
     } catch {}
@@ -1046,7 +1388,7 @@ export default function App() {
     };
     setStories((prev) => [fullStory, ...prev]);
     try {
-      await fetch('/api/global/stories', {
+      await fetchWithFallback('/api/global/stories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ story: fullStory }),

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { sounds } from '../utils/audioEffects';
 import { LiveRadioBroadcast } from '../types';
+import { getApiUrl, fetchWithFallback } from '../utils/apiConfig';
 
 interface YouTubeAudioPlayerProps {
   isMaxAdmin: boolean;
@@ -120,7 +121,7 @@ export const YouTubeAudioPlayer: React.FC<YouTubeAudioPlayerProps> = ({ isMaxAdm
 
     const fetchStatus = async () => {
       try {
-        const res = await fetch('/api/radio/status');
+        const res = await fetchWithFallback('/api/radio/status');
         if (res.ok) {
           const data: LiveRadioBroadcast = await res.json();
           if (isMounted) {
@@ -136,7 +137,7 @@ export const YouTubeAudioPlayer: React.FC<YouTubeAudioPlayerProps> = ({ isMaxAdm
     fetchStatus();
 
     try {
-      eventSource = new EventSource('/api/radio/stream');
+      eventSource = new EventSource(getApiUrl('/api/radio/stream'));
 
       eventSource.addEventListener('init', (e: MessageEvent) => {
         try {
@@ -214,7 +215,7 @@ export const YouTubeAudioPlayer: React.FC<YouTubeAudioPlayerProps> = ({ isMaxAdm
   // Broadcast to server (Adm Master Action)
   const broadcastToServer = async (playState: boolean, ytId: string, title: string) => {
     try {
-      await fetch('/api/radio/broadcast', {
+      await fetchWithFallback('/api/radio/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

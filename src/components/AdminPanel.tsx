@@ -63,6 +63,7 @@ import {
   InterServerPacket
 } from '../types';
 import { sounds } from '../utils/audioEffects';
+import { fetchWithFallback } from '../utils/apiConfig';
 import { INITIAL_STORE_CONFIG } from '../data/initialData';
 import { AvatarEditModal } from './AvatarEditModal';
 import { ProfileReportModal } from './ProfileReportModal';
@@ -206,9 +207,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       localStorage.setItem('hl_store_config', JSON.stringify(updated));
     } catch {}
 
-    // Disparar broadcast oficial para todos os clientes conectados via SSE
+    // Disparar broadcast oficial para todos os clientes conectados via SSE e fallback de rede
     try {
-      await fetch('/api/announcement/broadcast', {
+      await fetchWithFallback('/api/announcement/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -217,7 +218,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           senderPhoto: updated.globalAnnouncementSenderAvatar,
           senderRole: '👑 Administrador Máximo',
           title: 'AVISO OFICIAL DA DIREÇÃO / HL VENDAS',
-          durationMs: 10000,
+          durationMs: 15000,
           priority: 'golden',
           userEmail: currentUser?.email || 'joaolucasgp1234@gmail.com',
           isMaxAdmin: true,
@@ -226,6 +227,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } catch (e) {
       console.error('Erro ao transmitir anúncio global:', e);
     }
+
+    try {
+      const syncChannel = new BroadcastChannel('hl_vendas_sync_channel');
+      syncChannel.postMessage({
+        type: 'ANNOUNCEMENT',
+        announcement: {
+          message: announcementText,
+          senderName: updated.globalAnnouncementSenderName,
+          senderPhoto: updated.globalAnnouncementSenderAvatar,
+          createdAt: updated.globalAnnouncementCreatedAt,
+        },
+      });
+      syncChannel.close();
+    } catch {}
 
     setAnnouncementSaved(true);
     setTimeout(() => setAnnouncementSaved(false), 4000);
@@ -476,7 +491,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setDetectiveLoading(true);
     sounds.playSparkle();
     try {
-      const res = await fetch('/api/lumininha/detective', {
+      const res = await fetchWithFallback('/api/lumininha/detective', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: detectiveQuery }),
@@ -496,7 +511,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setMarketingLoading(true);
     sounds.playSparkle();
     try {
-      const res = await fetch('/api/lumininha/marketing-gen', {
+      const res = await fetchWithFallback('/api/lumininha/marketing-gen', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productTarget: marketingTopic }),
@@ -2305,7 +2320,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       localStorage.setItem('hl_store_config', JSON.stringify(updated));
                     } catch {}
                     try {
-                      await fetch('/api/announcement/clear', { method: 'POST' });
+                      await fetchWithFallback('/api/announcement/clear', { method: 'POST' });
                     } catch {}
                   }}
                   className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-2xl transition-colors cursor-pointer"

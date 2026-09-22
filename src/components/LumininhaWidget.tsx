@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { ChatMessage, LumininhaState, WeatherType, Product, UserProfile, SiteSymbolAnimationConfig, CustomSymbol } from '../types';
 import { sounds } from '../utils/audioEffects';
+import { fetchWithFallback } from '../utils/apiConfig';
 import { AnimatedPixelSprite } from './AnimatedPixelSprite';
 
 interface LumininhaWidgetProps {
@@ -200,7 +201,7 @@ export const LumininhaWidget: React.FC<LumininhaWidgetProps> = ({
     try {
       const catalogSummary = products.map((p) => `${p.name} (R$ ${p.price.toFixed(2)})`).join(', ');
 
-      const res = await fetch('/api/lumininha/chat', {
+      const res = await fetchWithFallback('/api/lumininha/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Crown, Sparkles, X, Megaphone, Radio } from 'lucide-react';
 import { GlobalAnnouncement } from '../types';
 import { sounds } from '../utils/audioEffects';
+import { getApiUrl, fetchWithFallback } from '../utils/apiConfig';
 
 interface GlobalAnnouncementOverlayProps {
   // Allows testing or triggering locally if needed
@@ -32,7 +33,11 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
     }
 
     try {
-      sounds.playFanfare();
+      if (typeof window !== 'undefined' && (window as any).playSoundEffect) {
+        (window as any).playSoundEffect('global_announcement');
+      } else {
+        sounds.playFanfare();
+      }
     } catch {}
 
     setActiveAnnouncement(ann);
@@ -69,9 +74,19 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let isMounted = true;
+    let broadcastChannel: BroadcastChannel | null = null;
 
     try {
-      eventSource = new EventSource('/api/radio/stream');
+      broadcastChannel = new BroadcastChannel('hl_vendas_sync_channel');
+      broadcastChannel.onmessage = (event) => {
+        if (event.data?.type === 'ANNOUNCEMENT' && event.data?.announcement && isMounted) {
+          triggerAnnouncement(event.data.announcement, true);
+        }
+      };
+    } catch {}
+
+    try {
+      eventSource = new EventSource(getApiUrl('/api/radio/stream'));
 
       eventSource.addEventListener('announcement', (event) => {
         try {
@@ -95,8 +110,8 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
       console.warn('[SSE Connection Warning]', err);
     }
 
-    // Also check initial current announcement
-    fetch('/api/announcement/current')
+    // Also check initial current announcement with fallback
+    fetchWithFallback('/api/announcement/current')
       .then((res) => res.json())
       .then((data) => {
         if (data?.announcement && isMounted) {
@@ -108,6 +123,11 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
     return () => {
       isMounted = false;
       if (eventSource) eventSource.close();
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.close();
+        } catch {}
+      }
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
     };

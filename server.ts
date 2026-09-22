@@ -11,6 +11,18 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+// Universal CORS configuration (permits Netlify, mobile clients, and all origins)
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Cache-Control");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: "15mb" }));
 
 // Lazy-initialize GoogleGenAI client
@@ -1015,6 +1027,7 @@ app.post("/api/announcement/broadcast", (req, res) => {
 
 // Canal em tempo real SSE (Server-Sent Events) para sincronização instantânea
 app.get("/api/radio/stream", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");

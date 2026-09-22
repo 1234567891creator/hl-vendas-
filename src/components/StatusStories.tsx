@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { StatusStory, UserProfile, Product } from '../types';
 import { sounds } from '../utils/audioEffects';
+import { fetchWithFallback } from '../utils/apiConfig';
 
 interface StatusStoriesProps {
   stories: StatusStory[];
@@ -100,7 +101,7 @@ export const StatusStories: React.FC<StatusStoriesProps> = ({
     let captionText = `✨ Status Lumininha: ${randomProduct.name} acabou de chegar para as entregas no Gilvan Sampaio! Reserve antes que acabe às 15:30!`;
 
     try {
-      const res = await fetch('/api/lumininha/marketing-gen', {
+      const res = await fetchWithFallback('/api/lumininha/marketing-gen', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productTarget: randomProduct.name }),

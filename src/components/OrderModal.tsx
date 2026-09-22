@@ -18,6 +18,7 @@ import {
 import { Order, OrderItem, Coupon, StoreConfig, UserProfile } from '../types';
 import { detectCurrentDevice } from '../utils/deviceDetector';
 import { sounds } from '../utils/audioEffects';
+import { fetchWithFallback } from '../utils/apiConfig';
 
 interface OrderModalProps {
   isOpen: boolean;
@@ -137,7 +138,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
 
     // Send order to backend API to simulate email notification to seller
     try {
-      await fetch('/api/orders/notify', {
+      await fetchWithFallback('/api/orders/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { ServerNode, InterServerPacket, UserProfile } from '../types';
 import { sounds } from '../utils/audioEffects';
+import { fetchWithFallback } from '../utils/apiConfig';
 
 interface ServerNetworkPanelProps {
   servers: ServerNode[];
@@ -67,7 +68,7 @@ export const ServerNetworkPanel: React.FC<ServerNetworkPanelProps> = ({
           setDirectiveMessage('');
         }
       } else {
-        const res = await fetch('/api/servers/dispatch', {
+        const res = await fetchWithFallback('/api/servers/dispatch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -97,7 +98,7 @@ export const ServerNetworkPanel: React.FC<ServerNetworkPanelProps> = ({
       if (onForceProfileSync) {
         await onForceProfileSync();
       } else {
-        await fetch('/api/servers/dispatch', {
+        await fetchWithFallback('/api/servers/dispatch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
