@@ -305,3 +305,41 @@ export interface SymbolLaunchEvent {
   timestamp: number;
   durationSeconds: number; // Exatamente 2 segundos solicitados pelo usuário
 }
+
+export type ServerNodeType = 
+  | 'adm_master' 
+  | 'communication_hub' 
+  | 'node_school' 
+  | 'node_sellers' 
+  | 'node_students' 
+  | 'node_backup';
+
+export interface ServerNode {
+  id: string;
+  name: string;
+  type: ServerNodeType;
+  ipAddress: string;
+  status: 'online' | 'busy' | 'syncing' | 'standby';
+  pingMs: number;
+  lastSeen: number;
+  packetsSent: number;
+  packetsReceived: number;
+  roleDescription: string;
+  isMasterEmitter?: boolean;
+  isCommunicationRelay?: boolean;
+}
+
+export interface InterServerPacket {
+  id: string;
+  timestamp: number;
+  originServerId: string;
+  originServerName: string;
+  relayServerId: string;
+  relayServerName: string;
+  targetServerIds: string[];
+  targetServerNames: string[];
+  action: 'profile_mutation' | 'global_announcement' | 'catalog_sync' | 'admin_directive' | 'system_heartbeat';
+  summary: string;
+  payloadData?: any;
+  status: 'relayed_and_delivered' | 'relaying' | 'queued';
+}

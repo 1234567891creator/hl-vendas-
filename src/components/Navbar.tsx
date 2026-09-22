@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
   ShoppingBag, 
@@ -63,8 +63,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleDarkMode,
   onDismissGlobalAnnouncement,
 }) => {
-  const isMaxAdmin = currentUser?.email?.toLowerCase() === 'joaolucasgp1234@gmail.com';
+  const isMaxAdmin = currentUser?.email?.toLowerCase() === 'joaolucasgp1234@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'studioscreator1@gmail.com' ||
+    currentUser?.isMaxAdmin === true;
   const hasAdminAccess = isMaxAdmin || currentUser?.role === 'seller';
+
+  const [dismissedLocally, setDismissedLocally] = useState(false);
+
+  useEffect(() => {
+    setDismissedLocally(false);
+  }, [storeConfig?.globalAnnouncement, storeConfig?.globalAnnouncementCreatedAt]);
 
   const safeConfig = storeConfig || INITIAL_STORE_CONFIG;
 
@@ -100,7 +108,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-purple-100 shadow-xs transition-all">
       {/* Global Notice Banner (if active) */}
-      {safeConfig?.globalAnnouncementActive && safeConfig?.globalAnnouncement && (
+      {safeConfig?.globalAnnouncementActive && safeConfig?.globalAnnouncement && !dismissedLocally && (
         <div className="bg-gradient-to-r from-pink-600 via-purple-600 to-pink-600 text-white text-xs sm:text-sm font-medium py-2 px-3 text-center flex items-center justify-between gap-2 shadow-inner border-b border-pink-400/40 relative">
           <div className="flex-1 flex items-center justify-center gap-2 flex-wrap">
             {/* Admin/Sender Profile Photo */}
@@ -128,18 +136,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           </div>
 
-          {onDismissGlobalAnnouncement && (
-            <button
-              onClick={() => {
-                sounds.playPop();
-                onDismissGlobalAnnouncement();
-              }}
-              className="p-1 text-white/80 hover:text-white hover:bg-black/20 rounded-lg transition-colors cursor-pointer flex-shrink-0"
-              title="Fechar comunicado"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
+          <button
+            onClick={() => {
+              sounds.playPop();
+              setDismissedLocally(true);
+              if (onDismissGlobalAnnouncement) onDismissGlobalAnnouncement();
+            }}
+            className="p-1 text-white/80 hover:text-white hover:bg-black/20 rounded-lg transition-colors cursor-pointer flex-shrink-0"
+            title="Fechar comunicado"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

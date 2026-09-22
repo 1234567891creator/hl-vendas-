@@ -81,8 +81,8 @@
     "pickupLocation": "Na porta do C.E.P.M.G Gilvan Sampaio",
     "pickupSchedule": "Toda Segunda e Terça-feira às 15:30",
     "sellerNotificationEmail": "joaolucasgp1234@gmail.com",
-    "globalAnnouncement": "",
-    "globalAnnouncementActive": false,
+    "globalAnnouncement": "📢 Teste de Comunicado Oficial Gilvan Sampaio!",
+    "globalAnnouncementActive": true,
     "globalAnnouncementSenderName": "João Lucas (Adm Máximo)",
     "globalAnnouncementSenderAvatar": "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80",
     "globalAnnouncementSenderRole": "Adm Máximo",
@@ -98,7 +98,8 @@
     "siteYoutubeBgUrl": "",
     "siteYoutubeBgOpacity": 45,
     "siteYoutubeBgMuted": true,
-    "siteYoutubeBgBlur": 0
+    "siteYoutubeBgBlur": 0,
+    "globalAnnouncementCreatedAt": 1790077595810
   },
   "users": [
     {

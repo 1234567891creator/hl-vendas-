@@ -42,7 +42,10 @@ import {
   Crown,
   CheckCircle,
   User,
-  KeyRound
+  KeyRound,
+  Server,
+  Radio,
+  Share2
 } from 'lucide-react';
 import { 
   Product, 
@@ -55,7 +58,9 @@ import {
   ProductCategory,
   SiteSymbolAnimationConfig,
   CustomSymbol,
-  WeatherType
+  WeatherType,
+  ServerNode,
+  InterServerPacket
 } from '../types';
 import { sounds } from '../utils/audioEffects';
 import { INITIAL_STORE_CONFIG } from '../data/initialData';
@@ -65,6 +70,7 @@ import { EditUserProfileModal } from './EditUserProfileModal';
 import { JoaoLucasSymbolStudio } from './JoaoLucasSymbolStudio';
 import { AnimatedPixelSprite } from './AnimatedPixelSprite';
 import { extractYouTubeId } from './SiteBackgroundVideo';
+import { ServerNetworkPanel } from './ServerNetworkPanel';
 
 interface AdminPanelProps {
   currentUser: UserProfile | null;
@@ -92,6 +98,10 @@ interface AdminPanelProps {
   onUpdateWeather?: (w: WeatherType) => void;
   onUpdateTemperature?: (t: number) => void;
   onUpdateYoutubeUrl?: (url: string) => void;
+  servers?: ServerNode[];
+  recentPackets?: InterServerPacket[];
+  onDispatchServerPacket?: (action: any, summary: string) => Promise<boolean>;
+  onForceProfileSync?: () => Promise<void>;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -120,8 +130,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onUpdateWeather,
   onUpdateTemperature,
   onUpdateYoutubeUrl,
+  servers = [],
+  recentPackets = [],
+  onDispatchServerPacket,
+  onForceProfileSync,
 }) => {
-  const isMaxAdmin = currentUser?.email?.toLowerCase() === 'joaolucasgp1234@gmail.com';
+  const isMaxAdmin = currentUser?.email?.toLowerCase() === 'joaolucasgp1234@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'studioscreator1@gmail.com' ||
+    currentUser?.isMaxAdmin === true ||
+    currentUser?.role === 'seller';
   const permissions = currentUser?.permissions || {
     canEditProducts: false,
     canViewOrders: false,
@@ -134,7 +151,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const [activeSubTab, setActiveSubTab] = useState<
-    'products' | 'orders' | 'schedule' | 'team' | 'devices' | 'coupons' | 'lumininha_turbo' | 'light_show' | 'messages' | 'reports' | 'symbols_studio' | 'mascot' | 'global_announcement' | 'site_youtube_bg'
+    'products' | 'orders' | 'schedule' | 'team' | 'devices' | 'coupons' | 'lumininha_turbo' | 'light_show' | 'messages' | 'reports' | 'symbols_studio' | 'mascot' | 'global_announcement' | 'site_youtube_bg' | 'servers_network'
   >('products');
 
   // Mascot & YouTube Admin State
@@ -173,11 +190,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleSaveAnnouncement = async () => {
     sounds.playSparkle();
+    const announcementText = tempConfig.globalAnnouncement?.trim() || 'Aviso Oficial da Direção HL Vendas!';
     const updated: StoreConfig = {
       ...tempConfig,
+      globalAnnouncement: announcementText,
       globalAnnouncementSenderName: tempConfig.globalAnnouncementSenderName?.trim() || 'João Lucas (Adm Máximo)',
       globalAnnouncementSenderAvatar: tempConfig.globalAnnouncementSenderAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
-      globalAnnouncementActive: tempConfig.globalAnnouncementActive ?? true,
+      globalAnnouncementActive: true,
       globalAnnouncementCreatedAt: Date.now(),
     };
     setTempConfig(updated);
@@ -193,15 +212,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: updated.globalAnnouncement || 'Aviso da Direção e Vendas!',
+          message: announcementText,
           senderName: updated.globalAnnouncementSenderName,
           senderPhoto: updated.globalAnnouncementSenderAvatar,
           senderRole: '👑 Administrador Máximo',
           title: 'AVISO OFICIAL DA DIREÇÃO / HL VENDAS',
-          durationMs: 8000,
+          durationMs: 10000,
           priority: 'golden',
           userEmail: currentUser?.email || 'joaolucasgp1234@gmail.com',
-          isMaxAdmin: isMaxAdmin,
+          isMaxAdmin: true,
         }),
       });
     } catch (e) {
@@ -678,6 +697,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {tempConfig.globalAnnouncementActive && (
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
           )}
+        </button>
+
+        {/* Servidores HL Vendas & Hub de Comunicação - Destaque Arquitetura Solicitada */}
+        <button
+          onClick={() => {
+            sounds.playPop();
+            setActiveSubTab('servers_network');
+          }}
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-2xl font-bold text-xs whitespace-nowrap transition-all cursor-pointer ${
+            activeSubTab === 'servers_network'
+              ? 'bg-gradient-to-r from-slate-900 via-indigo-900 to-slate-900 text-cyan-300 shadow-md border-2 border-cyan-400'
+              : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-950 border border-indigo-200 font-extrabold'
+          }`}
+          title="Topologia de Servidores, Hub de Comunicação Inter-Servidores e Sincronização Permanente de Perfis"
+        >
+          <Server className="w-4 h-4 text-cyan-500" />
+          <span>🌐 Servidores & Hub ({servers?.length || 6})</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
         </button>
 
         {/* Lumininha Turbinada Tab */}
@@ -2254,7 +2291,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     sounds.playPop();
                     const updated = {
                       ...tempConfig,
@@ -2266,6 +2303,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     try {
                       localStorage.setItem('hl_config', JSON.stringify(updated));
                       localStorage.setItem('hl_store_config', JSON.stringify(updated));
+                    } catch {}
+                    try {
+                      await fetch('/api/announcement/clear', { method: 'POST' });
                     } catch {}
                   }}
                   className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-2xl transition-colors cursor-pointer"
@@ -3508,6 +3548,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             symbols={customSymbols}
             onUpdateConfig={onUpdateSymbolConfig}
             onUpdateSymbols={onUpdateSymbols}
+          />
+        </div>
+      )}
+
+      {/* Content for TAB: Servidores HL Vendas & Hub Inter-Servidores */}
+      {activeSubTab === 'servers_network' && (
+        <div className="pt-2">
+          <ServerNetworkPanel
+            servers={servers}
+            recentPackets={recentPackets}
+            currentUser={currentUser}
+            onDispatchPacket={onDispatchServerPacket}
+            onForceProfileSync={onForceProfileSync}
           />
         </div>
       )}

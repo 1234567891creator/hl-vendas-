@@ -19,13 +19,22 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
   const dismissTimerRef = useRef<NodeJS.Timeout | null>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const triggerAnnouncement = (ann: GlobalAnnouncement) => {
-    // Check if not expired
-    const elapsed = Date.now() - ann.createdAt;
-    const remaining = ann.durationMs - elapsed;
-    if (remaining <= 500) return;
+  const triggerAnnouncement = (ann: GlobalAnnouncement, isLive: boolean = false) => {
+    if (!ann || !ann.message) return;
 
-    sounds.playFanfare();
+    // Se for ao vivo via SSE ou disparo imediato, garante a duração total sem penalidade de timezone
+    let totalDuration = typeof ann.durationMs === 'number' && ann.durationMs >= 3000 ? ann.durationMs : 10000;
+    if (!isLive && ann.createdAt) {
+      const elapsed = Date.now() - ann.createdAt;
+      const remaining = totalDuration - elapsed;
+      if (remaining <= 800) return;
+      totalDuration = remaining;
+    }
+
+    try {
+      sounds.playFanfare();
+    } catch {}
+
     setActiveAnnouncement(ann);
     setProgressPercent(100);
 
@@ -33,12 +42,12 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
 
     const startTime = Date.now();
-    const totalDuration = remaining;
+    const duration = totalDuration;
 
     progressIntervalRef.current = setInterval(() => {
       const now = Date.now();
       const spent = now - startTime;
-      const leftRatio = Math.max(0, 1 - spent / totalDuration);
+      const leftRatio = Math.max(0, 1 - spent / duration);
       setProgressPercent(leftRatio * 100);
     }, 50);
 
@@ -46,13 +55,13 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
       setActiveAnnouncement(null);
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
       if (onDismissExternal) onDismissExternal();
-    }, remaining);
+    }, duration);
   };
 
   // Watch external prop
   useEffect(() => {
     if (externalAnnouncement) {
-      triggerAnnouncement(externalAnnouncement);
+      triggerAnnouncement(externalAnnouncement, true);
     }
   }, [externalAnnouncement]);
 
@@ -68,10 +77,18 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
         try {
           const data: GlobalAnnouncement = JSON.parse(event.data);
           if (data && isMounted) {
-            triggerAnnouncement(data);
+            triggerAnnouncement(data, true);
           }
         } catch (err) {
           console.error('[SSE Global Announcement Parse Error]', err);
+        }
+      });
+
+      eventSource.addEventListener('announcement_cleared', () => {
+        if (isMounted) {
+          setActiveAnnouncement(null);
+          if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
         }
       });
     } catch (err) {
@@ -83,7 +100,7 @@ export const GlobalAnnouncementOverlay: React.FC<GlobalAnnouncementOverlayProps>
       .then((res) => res.json())
       .then((data) => {
         if (data?.announcement && isMounted) {
-          triggerAnnouncement(data.announcement);
+          triggerAnnouncement(data.announcement, false);
         }
       })
       .catch(() => {});

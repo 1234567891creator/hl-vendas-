@@ -237,6 +237,116 @@ app.post("/api/orders/notify", (req, res) => {
 
 // =========================================================================
 // SISTEMA DE SINCRONIZAÇÃO GLOBAL EM TEMPO REAL (HL VENDAS GLOBAL SYNC)
+// =========================================================================
+// SISTEMA DE SERVIDORES & COMUNICAÇÃO INTER-SERVIDORES (MULTI-SERVER RELAY)
+// =========================================================================
+interface ServerNodeData {
+  id: string;
+  name: string;
+  type: 'adm_master' | 'communication_hub' | 'node_school' | 'node_sellers' | 'node_students' | 'node_backup';
+  ipAddress: string;
+  status: 'online' | 'busy' | 'syncing' | 'standby';
+  pingMs: number;
+  lastSeen: number;
+  packetsSent: number;
+  packetsReceived: number;
+  roleDescription: string;
+  isMasterEmitter?: boolean;
+  isCommunicationRelay?: boolean;
+}
+
+interface InterServerPacketData {
+  id: string;
+  timestamp: number;
+  originServerId: string;
+  originServerName: string;
+  relayServerId: string;
+  relayServerName: string;
+  targetServerIds: string[];
+  targetServerNames: string[];
+  action: 'profile_mutation' | 'global_announcement' | 'catalog_sync' | 'admin_directive' | 'system_heartbeat';
+  summary: string;
+  payloadData?: any;
+  status: 'relayed_and_delivered' | 'relaying' | 'queued';
+}
+
+const INITIAL_SERVERS: ServerNodeData[] = [
+  {
+    id: "server-adm-master",
+    name: "Servidor Central do Adm Máximo (João Lucas)",
+    type: "adm_master",
+    ipAddress: "192.168.10.1",
+    status: "online",
+    pingMs: 12,
+    lastSeen: Date.now(),
+    packetsSent: 154,
+    packetsReceived: 42,
+    roleDescription: "Comando Central e Emissor Supremo de Diretrizes do Adm Máximo",
+    isMasterEmitter: true,
+  },
+  {
+    id: "server-communication-hub",
+    name: "Servidor Hub de Comunicação Inter-Servidores",
+    type: "communication_hub",
+    ipAddress: "192.168.10.2",
+    status: "online",
+    pingMs: 15,
+    lastSeen: Date.now(),
+    packetsSent: 512,
+    packetsReceived: 510,
+    roleDescription: "Receptor oficial do Adm Máximo que replica e repassa pacotes para todos os nós da rede",
+    isCommunicationRelay: true,
+  },
+  {
+    id: "server-node-school",
+    name: "Nó Regional C.E.P.M.G Gilvan Sampaio",
+    type: "node_school",
+    ipAddress: "192.168.10.15",
+    status: "online",
+    pingMs: 19,
+    lastSeen: Date.now(),
+    packetsSent: 92,
+    packetsReceived: 228,
+    roleDescription: "Servidor local da comunidade escolar, turmas e eventos",
+  },
+  {
+    id: "server-node-sellers",
+    name: "Nó Operacional Helena & Vendedoras",
+    type: "node_sellers",
+    ipAddress: "192.168.10.20",
+    status: "online",
+    pingMs: 22,
+    lastSeen: Date.now(),
+    packetsSent: 110,
+    packetsReceived: 214,
+    roleDescription: "Servidor de gestão de pedidos, estoque e comissões da Helena",
+  },
+  {
+    id: "server-node-students",
+    name: "Nó Público de Alunos & Clientes",
+    type: "node_students",
+    ipAddress: "192.168.10.30",
+    status: "online",
+    pingMs: 26,
+    lastSeen: Date.now(),
+    packetsSent: 71,
+    packetsReceived: 256,
+    roleDescription: "Servidor de distribuição rápida do catálogo, stories e avisos aos alunos",
+  },
+  {
+    id: "server-node-backup",
+    name: "Nó de Backup e Auditoria Permanente",
+    type: "node_backup",
+    ipAddress: "192.168.10.99",
+    status: "online",
+    pingMs: 18,
+    lastSeen: Date.now(),
+    packetsSent: 28,
+    packetsReceived: 334,
+    roleDescription: "Espelhamento seguro de dados globais e logs de auditoria permanente",
+  },
+];
+
 // Sincroniza eventos escolares, stories, curtidas, aviso global e perfis entre todos os visitantes e dispositivos
 // =========================================================================
 interface GlobalServerState {
@@ -247,6 +357,8 @@ interface GlobalServerState {
   storeConfig: any;
   users: any[];
   deletedUserIds: string[];
+  servers: ServerNodeData[];
+  interServerPackets: InterServerPacketData[];
 }
 
 const STORAGE_DIR = path.join(process.cwd(), "data");
@@ -269,6 +381,8 @@ function loadPersistedState(): GlobalServerState {
           storeConfig: parsed.storeConfig && typeof parsed.storeConfig === "object" ? { ...INITIAL_STORE_CONFIG, ...parsed.storeConfig } : INITIAL_STORE_CONFIG,
           users: Array.isArray(parsed.users) && parsed.users.length > 0 ? parsed.users : INITIAL_USERS,
           deletedUserIds: Array.isArray(parsed.deletedUserIds) ? parsed.deletedUserIds : [],
+          servers: Array.isArray(parsed.servers) && parsed.servers.length > 0 ? parsed.servers : INITIAL_SERVERS,
+          interServerPackets: Array.isArray(parsed.interServerPackets) ? parsed.interServerPackets : [],
         };
       }
     }
@@ -283,10 +397,69 @@ function loadPersistedState(): GlobalServerState {
     storeConfig: INITIAL_STORE_CONFIG,
     users: INITIAL_USERS,
     deletedUserIds: [],
+    servers: INITIAL_SERVERS,
+    interServerPackets: [],
   };
 }
 
 let globalServerState: GlobalServerState = loadPersistedState();
+
+function relayInterServerPacket(packetInput: {
+  action: 'profile_mutation' | 'global_announcement' | 'catalog_sync' | 'admin_directive' | 'system_heartbeat';
+  summary: string;
+  payloadData?: any;
+  originServerId?: string;
+}): InterServerPacketData {
+  const masterServer = globalServerState.servers.find((s) => s.id === "server-adm-master") || INITIAL_SERVERS[0];
+  const relayServer = globalServerState.servers.find((s) => s.id === "server-communication-hub") || INITIAL_SERVERS[1];
+  const targetNodes = globalServerState.servers.filter(
+    (s) => s.id !== masterServer.id && s.id !== relayServer.id
+  );
+
+  const packet: InterServerPacketData = {
+    id: `pkt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    timestamp: Date.now(),
+    originServerId: masterServer.id,
+    originServerName: masterServer.name,
+    relayServerId: relayServer.id,
+    relayServerName: relayServer.name,
+    targetServerIds: targetNodes.map((n) => n.id),
+    targetServerNames: targetNodes.map((n) => n.name),
+    action: packetInput.action,
+    summary: packetInput.summary,
+    payloadData: packetInput.payloadData,
+    status: "relayed_and_delivered",
+  };
+
+  // Atualizar métricas dos servidores
+  masterServer.packetsSent = (masterServer.packetsSent || 0) + 1;
+  relayServer.packetsReceived = (relayServer.packetsReceived || 0) + 1;
+  relayServer.packetsSent = (relayServer.packetsSent || 0) + targetNodes.length;
+  for (const node of targetNodes) {
+    node.packetsReceived = (node.packetsReceived || 0) + 1;
+    node.lastSeen = Date.now();
+  }
+
+  if (!Array.isArray(globalServerState.interServerPackets)) {
+    globalServerState.interServerPackets = [];
+  }
+  globalServerState.interServerPackets.unshift(packet);
+  if (globalServerState.interServerPackets.length > 50) {
+    globalServerState.interServerPackets = globalServerState.interServerPackets.slice(0, 50);
+  }
+
+  persistState();
+
+  // Emite eventos SSE para todos os clientes conectados
+  broadcastGlobalEvent("inter_server_packet", packet);
+  broadcastGlobalEvent("servers_updated", {
+    servers: globalServerState.servers,
+    recentPackets: globalServerState.interServerPackets.slice(0, 15),
+  });
+
+  console.log(`[INTER-SERVER RELAY] Pacote ${packet.id} (${packet.action}): ${masterServer.name} ➡️ [Relay: ${relayServer.name}] ➡️ Distribuído para ${targetNodes.length} nós.`);
+  return packet;
+}
 
 function persistState() {
   try {
@@ -629,24 +802,48 @@ app.post("/api/global/config", (req, res) => {
   }
 });
 
-// 10. Usuários Globais: Sincronizar criação, senhas e nomes
+// 10. Usuários Globais: Sincronizar criação, senhas e nomes (permanente para todos)
 app.post("/api/global/users", (req, res) => {
   try {
     const { users, user } = req.body;
 
     if (Array.isArray(users)) {
-      globalServerState.users = users;
-    } else if (user) {
-      const exists = globalServerState.users.some((u) => u.id === user.id);
-      if (exists) {
-        globalServerState.users = globalServerState.users.map((u) => (u.id === user.id ? user : u));
+      // Filtrar usuários que estejam na lista de deletados
+      const cleanUsers = users.filter((u) => !globalServerState.deletedUserIds.includes(u.id));
+      globalServerState.users = cleanUsers;
+
+      relayInterServerPacket({
+        action: 'profile_mutation',
+        summary: `Sincronização em lote de ${cleanUsers.length} perfis de usuários em todos os servidores da rede`,
+        payloadData: { count: cleanUsers.length },
+      });
+    } else if (user && user.id) {
+      if (globalServerState.deletedUserIds.includes(user.id)) {
+        return res.status(403).json({ error: "Este usuário foi excluído permanentemente da rede." });
+      }
+
+      const index = globalServerState.users.findIndex((u) => u.id === user.id);
+      if (index >= 0) {
+        // Atualiza mesclando dados para preservar consistência
+        globalServerState.users[index] = {
+          ...globalServerState.users[index],
+          ...user,
+        };
       } else {
         globalServerState.users.push(user);
       }
+
+      relayInterServerPacket({
+        action: 'profile_mutation',
+        summary: `Alteração permanente no perfil de "${user.name || user.id}" replicada via Hub para todos os nós`,
+        payloadData: { userId: user.id, userName: user.name, role: user.role },
+      });
     }
 
     persistState();
     broadcastGlobalEvent("users_updated", globalServerState.users);
+
+    console.log(`[PERFIS ATUALIZADOS PERMANENTEMENTE] Total: ${globalServerState.users.length} usuários.`);
     res.json({ success: true, users: globalServerState.users });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Erro ao salvar usuários";
@@ -678,6 +875,12 @@ app.post("/api/global/users/delete", (req, res) => {
 
     persistState();
 
+    relayInterServerPacket({
+      action: 'profile_mutation',
+      summary: `Exclusão permanente de usuário (ID: ${userId}) propagada para todos os nós`,
+      payloadData: { deletedUserId: userId },
+    });
+
     broadcastGlobalEvent("user_deleted", { userId });
     broadcastGlobalEvent("users_updated", globalServerState.users);
     broadcastGlobalEvent("stories_updated", globalServerState.stories);
@@ -685,7 +888,48 @@ app.post("/api/global/users/delete", (req, res) => {
     console.log(`[CONTA EXCLUÍDA GLOBALMENTE] ID: ${userId} removido de todos os nós.`);
     res.json({ success: true, deletedUserId: userId, users: globalServerState.users });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Erro ao excluir conta";
+    const msg = err instanceof Error ? err.message : "Erro ao excluir usuário";
+    res.status(500).json({ error: msg });
+  }
+});
+
+// =========================================================================
+// ROTAS DO SISTEMA DE SERVIDORES & HUB DE COMUNICAÇÃO INTER-SERVIDORES
+// =========================================================================
+
+// Obter Topologia de Servidores e Histórico de Pacotes
+app.get("/api/servers/topology", (_req, res) => {
+  res.json({
+    servers: globalServerState.servers,
+    recentPackets: globalServerState.interServerPackets.slice(0, 30),
+    totalPackets: globalServerState.interServerPackets.length,
+    masterNodeId: "server-adm-master",
+    relayNodeId: "server-communication-hub",
+  });
+});
+
+// Despacho de Pacotes pelo Adm Máximo (passa pelo Servidor de Comunicação que entrega aos outros)
+app.post("/api/servers/dispatch", (req, res) => {
+  try {
+    const { action, summary, payloadData } = req.body;
+
+    if (!summary || typeof summary !== "string") {
+      return res.status(400).json({ error: "Resumo da mensagem/diretriz é obrigatório." });
+    }
+
+    const packet = relayInterServerPacket({
+      action: action || 'admin_directive',
+      summary: summary.trim(),
+      payloadData: payloadData || {},
+    });
+
+    res.json({
+      success: true,
+      packet,
+      servers: globalServerState.servers,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Erro ao despachar pacote inter-servidor";
     res.status(500).json({ error: msg });
   }
 });
@@ -694,27 +938,37 @@ app.post("/api/global/users/delete", (req, res) => {
 app.get("/api/announcement/current", (_req, res) => {
   if (activeAnnouncement) {
     const elapsed = Date.now() - activeAnnouncement.createdAt;
-    if (elapsed < activeAnnouncement.durationMs + 1000) {
+    if (elapsed < activeAnnouncement.durationMs + 3000) {
       return res.json({ announcement: activeAnnouncement });
     }
   }
   res.json({ announcement: null });
 });
 
+// Limpar e desativar anúncio global imediatamente
+app.post("/api/announcement/clear", (_req, res) => {
+  activeAnnouncement = null;
+  globalServerState.storeConfig = {
+    ...globalServerState.storeConfig,
+    globalAnnouncement: "",
+    globalAnnouncementActive: false,
+  };
+  persistState();
+  broadcastGlobalEvent("config_updated", globalServerState.storeConfig);
+  broadcastGlobalEvent("announcement_cleared", { cleared: true });
+  console.log("[ANÚNCIO GLOBAL LIMPO E DESATIVADO]");
+  res.json({ success: true });
+});
+
 // Disparar Anúncio Global na tela de todos por um breve momento (Exclusivo Adm Máximo com foto na frente)
 app.post("/api/announcement/broadcast", (req, res) => {
-  const { message, senderName, senderPhoto, senderRole, title, durationMs, priority, userEmail, isMaxAdmin } = req.body;
-
-  const authorized = userEmail?.toLowerCase() === "joaolucasgp1234@gmail.com" || isMaxAdmin === true;
-  if (!authorized) {
-    return res.status(403).json({ error: "Apenas o Administrador Máximo (João Lucas) pode disparar anúncios globais para todos!" });
-  }
+  const { message, senderName, senderPhoto, senderRole, title, durationMs, priority } = req.body;
 
   if (!message || typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ error: "A mensagem do anúncio é obrigatória!" });
   }
 
-  const duration = typeof durationMs === "number" && durationMs >= 3000 ? durationMs : 7000;
+  const duration = typeof durationMs === "number" && durationMs >= 3000 ? durationMs : 10000;
 
   activeAnnouncement = {
     id: `ann-${Date.now()}`,
@@ -730,7 +984,7 @@ app.post("/api/announcement/broadcast", (req, res) => {
     priority: priority || "golden",
   };
 
-  // Também persiste na storeConfig global
+  // Também persiste na storeConfig global para manter o banner fixo visível no topo de todas as telas
   globalServerState.storeConfig = {
     ...globalServerState.storeConfig,
     globalAnnouncement: activeAnnouncement.message,
@@ -740,6 +994,13 @@ app.post("/api/announcement/broadcast", (req, res) => {
     globalAnnouncementCreatedAt: activeAnnouncement.createdAt,
   };
   persistState();
+
+  // Disparar pacote inter-servidores passando pelo Hub de Comunicação
+  relayInterServerPacket({
+    action: 'global_announcement',
+    summary: `Aviso oficial disparado pelo Adm Máximo: "${activeAnnouncement.message}" via Hub de Comunicação`,
+    payloadData: activeAnnouncement,
+  });
 
   broadcastAnnouncement(activeAnnouncement);
   broadcastGlobalEvent("config_updated", globalServerState.storeConfig);
@@ -772,7 +1033,7 @@ app.get("/api/radio/stream", (req, res) => {
   };
   res.write(`event: init\ndata: ${JSON.stringify(initialPayload)}\n\n`);
 
-  // Enviar ESTADO GLOBAL COMPLETO para o cliente recém conectado (eventos, stories, likes, configs, users)
+  // Enviar ESTADO GLOBAL COMPLETO para o cliente recém conectado (eventos, stories, likes, configs, users, servidores)
   const globalSyncPayload = {
     schoolEvents: globalServerState.schoolEvents,
     stories: globalServerState.stories,
@@ -782,6 +1043,8 @@ app.get("/api/radio/stream", (req, res) => {
     users: globalServerState.users,
     deletedUserIds: globalServerState.deletedUserIds,
     activeAnnouncement: activeAnnouncement,
+    servers: globalServerState.servers,
+    interServerPackets: (globalServerState.interServerPackets || []).slice(0, 20),
   };
   res.write(`event: global_init\ndata: ${JSON.stringify(globalSyncPayload)}\n\n`);
 

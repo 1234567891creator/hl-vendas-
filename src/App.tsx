@@ -35,7 +35,9 @@ import {
   SchoolEvent,
   CustomSymbol,
   SiteSymbolAnimationConfig,
-  WeatherType
+  WeatherType,
+  ServerNode,
+  InterServerPacket
 } from './types';
 
 import { 
@@ -221,6 +223,10 @@ export default function App() {
   const [isEditPillModalOpen, setIsEditPillModalOpen] = useState(false);
   const isMaxAdmin = currentUser?.email?.toLowerCase() === 'joaolucasgp1234@gmail.com' || currentUser?.isMaxAdmin;
 
+  // Multi-server topology & inter-server communication state
+  const [servers, setServers] = useState<ServerNode[]>([]);
+  const [recentPackets, setRecentPackets] = useState<InterServerPacket[]>([]);
+
   const handleOpenAvatarModal = (user: UserProfile) => {
     sounds.playPop();
     setAvatarModalUser(user);
@@ -282,6 +288,15 @@ export default function App() {
       }
       return prev;
     });
+
+    // 7. Notifica backend para sincronizar foto do perfil permanentemente para todos os servidores
+    try {
+      fetch('/api/global/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: { id: userId, avatar: newAvatarUrl } }),
+      }).catch(() => {});
+    } catch {}
   };
 
   // Comprehensive User Deletion: remove de todos os locais e sincroniza no servidor permanentemente
@@ -631,6 +646,8 @@ export default function App() {
           if (Array.isArray(data.users) && data.users.length > 0) {
             setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
           }
+          if (Array.isArray(data.servers)) setServers(data.servers);
+          if (Array.isArray(data.interServerPackets)) setRecentPackets(data.interServerPackets);
         }
       } catch {}
     };
@@ -655,6 +672,8 @@ export default function App() {
             if (data.productLikes) setProductLikes(data.productLikes);
             if (data.storeConfig) setStoreConfig((prev) => ({ ...prev, ...data.storeConfig }));
             if (Array.isArray(data.users)) setUsers(data.users.filter((u: any) => !deletedIds.includes(u.id)));
+            if (Array.isArray(data.servers)) setServers(data.servers);
+            if (Array.isArray(data.interServerPackets)) setRecentPackets(data.interServerPackets);
           }
         } catch {}
       });
@@ -719,7 +738,20 @@ export default function App() {
           const updatedUsers = JSON.parse(e.data);
           if (Array.isArray(updatedUsers)) {
             const deletedIds: string[] = JSON.parse(localStorage.getItem('hl_deleted_user_ids') || '[]');
-            setUsers(updatedUsers.filter((u: any) => !deletedIds.includes(u.id)));
+            const validUsers = updatedUsers.filter((u: any) => !deletedIds.includes(u.id));
+            setUsers(validUsers);
+            localStorage.setItem('hl_users', JSON.stringify(validUsers));
+
+            // Sincronização permanente: se currentUser foi alterado, reflete na sessão imediatamente
+            setCurrentUser((prevCurrent) => {
+              if (!prevCurrent) return null;
+              const freshSelf = validUsers.find((u: any) => u.id === prevCurrent.id);
+              if (freshSelf) {
+                localStorage.setItem('hl_current_user', JSON.stringify(freshSelf));
+                return freshSelf;
+              }
+              return prevCurrent;
+            });
           }
         } catch {}
       });
@@ -738,6 +770,27 @@ export default function App() {
           }
         } catch {}
       });
+
+      eventSource.addEventListener('servers_updated', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload && Array.isArray(payload.servers)) {
+            setServers(payload.servers);
+          }
+          if (payload && Array.isArray(payload.recentPackets)) {
+            setRecentPackets(payload.recentPackets);
+          }
+        } catch {}
+      });
+
+      eventSource.addEventListener('inter_server_packet', (e: MessageEvent) => {
+        try {
+          const pkt = JSON.parse(e.data);
+          if (pkt && pkt.id) {
+            setRecentPackets((prev) => [pkt, ...prev.filter((p) => p.id !== pkt.id)].slice(0, 50));
+          }
+        } catch {}
+      });
     } catch {}
 
     return () => {
@@ -745,6 +798,54 @@ export default function App() {
       if (pollInterval) clearInterval(pollInterval);
     };
   }, []);
+
+  const handleDispatchServerPacket = async (
+    action: 'profile_mutation' | 'global_announcement' | 'catalog_sync' | 'admin_directive' | 'system_heartbeat',
+    summary: string
+  ): Promise<boolean> => {
+    try {
+      sounds.playSparkle();
+      const res = await fetch('/api/servers/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          summary,
+          payloadData: {
+            senderId: currentUser?.id || 'user-joao-lucas',
+            senderName: currentUser?.name || 'João Lucas (Adm Máximo)',
+            senderRole: currentUser?.role || 'max_admin',
+          },
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.packet) {
+          setRecentPackets((prev) => [data.packet, ...prev.filter((p) => p.id !== data.packet.id)].slice(0, 50));
+        }
+        if (data.servers) {
+          setServers(data.servers);
+        }
+        return true;
+      }
+    } catch (err) {
+      console.error('Falha ao despachar pacote pelo Hub:', err);
+    }
+    return false;
+  };
+
+  const handleForceProfileSync = async () => {
+    try {
+      sounds.playPop();
+      await fetch('/api/global/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ users }),
+      });
+    } catch (err) {
+      console.error('Falha ao forçar sincronização de perfis:', err);
+    }
+  };
 
   const handleToggleEventStatus = async (eventId: string) => {
     sounds.playPop();
@@ -1100,10 +1201,7 @@ export default function App() {
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode((prev) => !prev)}
         onDismissGlobalAnnouncement={() => {
-          handleUpdateStoreConfig({
-            ...storeConfig,
-            globalAnnouncementActive: false,
-          });
+          // Fechamento exclusivamente local na tela do visitante, preservando o aviso global ativo na loja
         }}
       />
 
@@ -1406,6 +1504,10 @@ export default function App() {
                 onUpdateWeather={setWeatherType}
                 onUpdateTemperature={setTemperature}
                 onUpdateYoutubeUrl={setYoutubeUrl}
+                servers={servers}
+                recentPackets={recentPackets}
+                onDispatchServerPacket={handleDispatchServerPacket}
+                onForceProfileSync={handleForceProfileSync}
               />
             </motion.div>
           )}
